@@ -1,0 +1,246 @@
+import {
+  requireNativeViewManager,
+  requireOptionalNativeModule,
+  Platform,
+} from "expo-modules-core";
+import React from "react";
+import { ViewStyle } from "react-native";
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export interface TvPlayerLoadParams {
+  url: string;
+  headers?: Record<string, string>;
+  /** "fairplay" is reserved for future iOS support and is a no-op on Android. */
+  drmType?: "widevine" | "playready" | "clearkey" | "fairplay";
+  drmLicenseUrl?: string;
+  /** Embedded ClearKey key (KID:KEY or JSON document) when no license server
+   *  URL is used. Passed separately from drmLicenseUrl so the native side can
+   *  build a local callback instead of making an HTTP request. */
+  drmLicenseKey?: string;
+  drmHeaders?: Record<string, string>;
+  /** Raw base64 PSSH initialization data (passed as DRM init data, not as a URL). */
+  drmPssh?: string;
+  autoPlay?: boolean;
+}
+
+export interface NativeAudioTrack {
+  groupIndex: number;
+  trackIndex: number;
+  id: string;
+  label: string;
+  language: string;
+  isSelected: boolean;
+}
+
+export interface NativeSubtitleTrack {
+  groupIndex: number;
+  trackIndex: number;
+  id: string;
+  label: string;
+  language: string;
+  isSelected: boolean;
+}
+
+export interface MediaMetadataParams {
+  title: string;
+  artist?: string;
+  artworkUri?: string;
+}
+
+export interface TvPlayerViewProps {
+  style?: ViewStyle;
+  onReady?: () => void;
+  onError?: (event: { nativeEvent: { message: string } }) => void;
+  onPlayingChange?: (event: { nativeEvent: { isPlaying: boolean } }) => void;
+  onBufferingChange?: (event: {
+    nativeEvent: { isBuffering: boolean };
+  }) => void;
+  onBackgroundAudioChange?: (event: {
+    nativeEvent: { enabled: boolean };
+  }) => void;
+  /** Fires every ~1 s while playing. position/duration are milliseconds. */
+  onPositionChange?: (event: {
+    nativeEvent: { position: number; duration: number };
+  }) => void;
+  /** Fires when available audio/subtitle tracks change (after load). */
+  onTracksChange?: (event: {
+    nativeEvent: {
+      audioTracks: NativeAudioTrack[];
+      subtitleTracks: NativeSubtitleTrack[];
+    };
+  }) => void;
+  /** Fires when the app enters or exits Picture-in-Picture mode. */
+  onPipModeChange?: (event: { nativeEvent: { isInPiP: boolean } }) => void;
+  /** Fires when the player engine changes (exoplayer <-> vlc). */
+  onEngineChange?: (event: { nativeEvent: { engine: string } }) => void;
+}
+
+// ── Native view ───────────────────────────────────────────────────────────────
+
+const NativeTvPlayerView =
+  Platform.OS === "android" ? requireNativeViewManager("TvPlayer") : null;
+
+// Module-level functions (not tied to a view instance)
+const TvPlayerModule =
+  Platform.OS === "android"
+    ? requireOptionalNativeModule<{
+        fetchPlaylist(url: string): Promise<{
+          success: boolean;
+          error: string;
+          content: string;
+        }>;
+      }>("TvPlayer")
+    : null;
+
+// ── Imperative commands ───────────────────────────────────────────────────────
+// AsyncFunction definitions inside the View block are automatically attached
+// to the React ref. Call them via ref.current directly.
+
+export const TvPlayerCommands = {
+  loadSource: (
+    viewRef: React.RefObject<any>,
+    params: TvPlayerLoadParams,
+  ): Promise<void> | undefined => viewRef.current?.loadSource(params),
+
+  play: (viewRef: React.RefObject<any>): Promise<void> | undefined =>
+    viewRef.current?.play(),
+
+  pause: (viewRef: React.RefObject<any>): Promise<void> | undefined =>
+    viewRef.current?.pause(),
+
+  seekTo: (
+    viewRef: React.RefObject<any>,
+    positionMs: number,
+  ): Promise<void> | undefined => viewRef.current?.seekTo(positionMs),
+
+  setVolume: (
+    viewRef: React.RefObject<any>,
+    volume: number,
+  ): Promise<void> | undefined => viewRef.current?.setVolume(volume),
+
+  release: (viewRef: React.RefObject<any>): Promise<void> | undefined =>
+    viewRef.current?.release(),
+
+  getCurrentPosition: (
+    viewRef: React.RefObject<any>,
+  ): Promise<number> | undefined => viewRef.current?.getCurrentPosition(),
+
+  getDuration: (viewRef: React.RefObject<any>): Promise<number> | undefined =>
+    viewRef.current?.getDuration(),
+
+  isPlaying: (viewRef: React.RefObject<any>): Promise<boolean> | undefined =>
+    viewRef.current?.isPlaying(),
+
+  /** "contain" | "cover" | "fill" — maps to RESIZE_MODE_FIT/ZOOM/FILL */
+  setResizeMode: (
+    viewRef: React.RefObject<any>,
+    mode: "contain" | "cover" | "fill",
+  ): Promise<void> | undefined => viewRef.current?.setResizeMode(mode),
+
+  enableBackgroundAudio: (
+    viewRef: React.RefObject<any>,
+  ): Promise<void> | undefined => viewRef.current?.enableBackgroundAudio(),
+
+  disableBackgroundAudio: (
+    viewRef: React.RefObject<any>,
+  ): Promise<void> | undefined => viewRef.current?.disableBackgroundAudio(),
+
+  isBackgroundAudioEnabled: (
+    viewRef: React.RefObject<any>,
+  ): Promise<boolean> | undefined =>
+    viewRef.current?.isBackgroundAudioEnabled(),
+
+  /**
+   * Publish playback to the system media UI (shade player, lock screen,
+   * Quick Settings tile, BT/Auto) during foreground playback. No-op while
+   * background audio owns the session. Called automatically on play/ready;
+   * call explicitly when returning to the foreground.
+   */
+  ensureMediaSession: (
+    viewRef: React.RefObject<any>,
+  ): Promise<void> | undefined => viewRef.current?.ensureMediaSession(),
+
+  /** Remove the foreground session (e.g. app backgrounded, playback off). */
+  releaseMediaSession: (
+    viewRef: React.RefObject<any>,
+  ): Promise<void> | undefined => viewRef.current?.releaseMediaSession(),
+
+  selectAudioTrack: (
+    viewRef: React.RefObject<any>,
+    groupIndex: number,
+    trackIndex: number,
+  ): Promise<void> | undefined =>
+    viewRef.current?.selectAudioTrack(groupIndex, trackIndex),
+
+  selectSubtitleTrack: (
+    viewRef: React.RefObject<any>,
+    groupIndex: number,
+    trackIndex: number,
+  ): Promise<void> | undefined =>
+    viewRef.current?.selectSubtitleTrack(groupIndex, trackIndex),
+
+  /** Whether Picture-in-Picture is available on this device (mobile, Android 8+). */
+  isPiPSupported: (
+    viewRef: React.RefObject<any>,
+  ): Promise<boolean> | undefined => viewRef.current?.isPiPSupported(),
+
+  /** Enter Picture-in-Picture mode. Resolves true when entry was initiated. */
+  enterPip: (viewRef: React.RefObject<any>): Promise<boolean> | undefined =>
+    viewRef.current?.enterPip(),
+
+  /** Set media metadata for the system notification and Now Playing controls. */
+  setMediaMetadata: (
+    viewRef: React.RefObject<any>,
+    params: { title: string; artist?: string; artworkUri?: string },
+  ): Promise<void> | undefined => viewRef.current?.setMediaMetadata(params),
+
+  /** Switch the active player engine ("exoplayer" | "vlc"). */
+  setPlayerEngine: (
+    viewRef: React.RefObject<any>,
+    engine: "exoplayer" | "vlc",
+  ): Promise<void> | undefined => viewRef.current?.setPlayerEngine(engine),
+
+  /** Get the current player engine name. */
+  getPlayerEngine: (
+    viewRef: React.RefObject<any>,
+  ): Promise<string> | undefined => viewRef.current?.getPlayerEngine(),
+};
+
+// ── React component ───────────────────────────────────────────────────────────
+
+export const TvPlayerView = React.forwardRef<any, TvPlayerViewProps>(
+  (props, ref) => {
+    if (!NativeTvPlayerView) return null;
+    return React.createElement(NativeTvPlayerView, { ...props, ref });
+  },
+);
+
+TvPlayerView.displayName = "TvPlayerView";
+
+// ── Module-level functions ────────────────────────────────────────────────────
+
+/**
+ * Fetches playlist content using native OkHttp (bypasses RN fetch limitations
+ * with User-Agent headers on Android). Returns { success, error, content }.
+ */
+export async function fetchPlaylistNative(
+  url: string,
+): Promise<{ success: boolean; error: string; content: string }> {
+  if (!TvPlayerModule || typeof TvPlayerModule.fetchPlaylist !== "function") {
+    return {
+      success: false,
+      error: "Native module not available",
+      content: "",
+    };
+  }
+  try {
+    return await TvPlayerModule.fetchPlaylist(url);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "Native fetch failed",
+      content: "",
+    };
+  }
+}

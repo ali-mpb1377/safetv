@@ -1,0 +1,368 @@
+import React, { useEffect, useMemo, useCallback, useState } from "react";
+import {
+  StyleSheet,
+  View,
+  Pressable,
+  StatusBar,
+  Platform,
+  useWindowDimensions,
+} from "react-native";
+
+const isTV = Platform.isTV;
+import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+
+import { ThemedText } from "@/components/ThemedText";
+import { useEpg } from "@/context/EpgContext";
+import {
+  AdvancedVideoPlayer,
+  VideoQuality,
+  DRMConfig,
+} from "@/components/AdvancedVideoPlayer";
+import { usePlaylist } from "@/context/PlaylistContext";
+import { usePinLock } from "@/context/PinLockContext";
+import { useTheme } from "@/hooks/useTheme";
+import { Spacing, BorderRadius } from "@/constants/theme";
+import { extractDRMFromManifest } from "@/lib/manifest-drm-extractor";
+import { RootStackParamList } from "@/navigation/RootStackNavigator";
+
+type PlayerRouteProp = RouteProp<RootStackParamList, "Player">;
+type PlayerNavigationProp = NativeStackNavigationProp<
+  RootStackParamList,
+  "Player"
+>;
+
+const DEFAULT_QUALITIES: VideoQuality[] = [
+  { label: "1080p", resolution: "1080p", bitrate: 5000000 },
+  { label: "720p", resolution: "720p", bitrate: 2500000 },
+  { label: "480p", resolution: "480p", bitrate: 1000000 },
+  { label: "360p", resolution: "360p", bitrate: 500000 },
+];
+
+let NavigationBarModule: any = null;
+
+async function loadNavigationBarModule() {
+  if (Platform.OS === "android" && !NavigationBarModule) {
+    try {
+      NavigationBarModule = require("expo-navigation-bar");
+    } catch (e) {
+      console.log("Navigation bar module not available");
+    }
+  }
+}
+
+async function hideNavigationBar() {
+  if (Platform.OS === "android" && NavigationBarModule) {
+    try {
+      await NavigationBarModule.setVisibilityAsync("hidden");
+      await NavigationBarModule.setBehaviorAsync("overlay-swipe");
+    } catch (e) {
+      console.log("Navigation bar control not available");
+    }
+  }
+}
+
+async function showNavigationBar() {
+  if (Platform.OS === "android" && NavigationBarModule) {
+    try {
+      await NavigationBarModule.setVisibilityAsync("visible");
+    } catch (e) {
+      console.log("Navigation bar control not available");
+    }
+  }
+}
+
+export default function PlayerScreen() {
+  const { width, height } = useWindowDimensions();
+  const navigation = useNavigation<PlayerNavigationProp>();
+  const route = useRoute<PlayerRouteProp>();
+  const { theme } = useTheme();
+  const { channelId, pinOk } = route.params;
+  const { isLockActive, requestUnlock } = usePinLock();
+  // Channel lock: ask for the PIN every time a channel is opened. Zapping
+  // prev/next inside the player passes pinOk so it does not re-ask each time.
+  const [unlocked, setUnlocked] = useState(!isLockActive || pinOk === true);
+
+  const {
+    getChannelById,
+    favorites,
+    toggleFavorite,
+    addToRecent,
+    playlist,
+    settings,
+    recentChannels,
+  } = usePlaylist();
+
+  const channel = getChannelById(channelId);
+  const isFavorite = favorites.includes(channelId);
+  const epg = useEpg();
+  const epgNowNext =
+    settings.showEpg && settings.showEpgInPlayer && epg.effectiveUrl
+      ? epg.getNowNext(channelId)
+      : undefined;
+  const epgSubtitle = epgNowNext?.now
+    ? `${channel?.group ?? ""} • ${epgNowNext.now.title}`.trim()
+    : channel?.group;
+
+  const [manifestDrm, setManifestDrm] = useState<
+    import("@/types/playlist").DRMInfo | undefined
+  >(undefined);
+
+  useEffect(() => {
+    if (!channel) return;
+    // If the channel already has KODIPROP DRM with a valid license key or URL, no
+    // need to fetch from the manifest.
+    if (
+      channel.drm?.type &&
+      (channel.drm?.licenseServer || channel.drm?.licenseKey)
+    ) {
+      setManifestDrm(undefined);
+      return;
+    }
+    let cancelled = false;
+    extractDRMFromManifest(channel.url, channel.headers).then((drm) => {
+      if (!cancelled) {
+        // Only store DRM info that has both a type AND a usable licenseServer URL
+        // or licenseKey, or is ClearKey (which may not need a license server URL).
+        // This prevents partial DRM state (type set, nothing usable) from being stored.
+        if (
+          drm?.type &&
+          (drm.licenseServer || drm.licenseKey || drm.type === "clearkey")
+        ) {
+          setManifestDrm(drm);
+        } else {
+          setManifestDrm(undefined);
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    channel?.url,
+    channel?.drm?.type,
+    channel?.drm?.licenseServer,
+    channel?.drm?.licenseKey,
+    channel?.headers,
+  ]);
+
+  const recentChannelObjects = useMemo(() => {
+    if (!playlist) return [];
+    return recentChannels
+      .filter((id) => id !== channelId)
+      .slice(0, 4)
+      .map((id) => getChannelById(id))
+      .filter((ch) => ch !== undefined) as NonNullable<
+      ReturnType<typeof getChannelById>
+    >[];
+  }, [recentChannels, channelId, playlist, getChannelById]);
+
+  useEffect(() => {
+    if (unlocked) return;
+    let cancelled = false;
+    requestUnlock("Enter PIN to watch").then((ok) => {
+      if (cancelled) return;
+      if (ok) setUnlocked(true);
+      else navigation.goBack();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [unlocked, requestUnlock, navigation]);
+
+  useEffect(() => {
+    if (channel && unlocked) {
+      addToRecent(channel.id);
+    }
+  }, [channel, unlocked]);
+
+  useEffect(() => {
+    loadNavigationBarModule().then(() => {
+      hideNavigationBar();
+    });
+    return () => {
+      showNavigationBar();
+    };
+  }, []);
+
+  const handleBack = useCallback(() => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    navigation.goBack();
+  }, [navigation]);
+
+  const handleFavorite = useCallback(async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await toggleFavorite(channelId);
+  }, [channelId, toggleFavorite]);
+
+  const handleChannelNav = useCallback(
+    (direction: "prev" | "next") => {
+      if (!playlist) return;
+
+      const currentIndex = playlist.channels.findIndex(
+        (ch) => ch.id === channelId,
+      );
+      if (currentIndex === -1) return;
+
+      let newIndex: number;
+      if (direction === "prev") {
+        newIndex =
+          currentIndex === 0 ? playlist.channels.length - 1 : currentIndex - 1;
+      } else {
+        newIndex =
+          currentIndex === playlist.channels.length - 1 ? 0 : currentIndex + 1;
+      }
+
+      const newChannel = playlist.channels[newIndex];
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      navigation.replace("Player", { channelId: newChannel.id, pinOk: true });
+    },
+    [playlist, channelId, navigation],
+  );
+
+  const handleChannelSelect = useCallback(
+    (selectedChannelId: string) => {
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (selectedChannelId === channelId) return;
+      navigation.replace("Player", {
+        channelId: selectedChannelId,
+        pinOk: true,
+      });
+    },
+    [channelId, navigation],
+  );
+
+  const handleError = useCallback((error: string) => {
+    console.error("Player error:", error);
+  }, []);
+
+  const drmConfig = useMemo((): DRMConfig | undefined => {
+    // Prefer KODIPROP-extracted DRM from the playlist
+    if (
+      channel?.drm?.type &&
+      (channel.drm.licenseServer || channel.drm.licenseKey)
+    ) {
+      return {
+        type: channel.drm.type as DRMConfig["type"],
+        licenseServer: channel.drm.licenseServer,
+        licenseKey: channel.drm.licenseKey,
+        headers: channel.drm.headers,
+        certificateUrl: channel.drm.certificateUrl,
+        pssh: channel.drm.pssh,
+      };
+    }
+
+    // Fall back to DRM extracted from the manifest itself.
+    // manifestDrm is only set when it has both type and a usable
+    // licenseServer, licenseKey, or is ClearKey.
+    if (
+      manifestDrm?.type &&
+      (manifestDrm.licenseServer ||
+        manifestDrm.licenseKey ||
+        manifestDrm.type === "clearkey")
+    ) {
+      return {
+        type: manifestDrm.type as DRMConfig["type"],
+        licenseServer: manifestDrm.licenseServer,
+        licenseKey: manifestDrm.licenseKey,
+        headers: manifestDrm.headers,
+        certificateUrl: manifestDrm.certificateUrl,
+        pssh: manifestDrm.pssh,
+      };
+    }
+
+    return undefined;
+  }, [channel?.drm, manifestDrm]);
+
+  const streamHeaders = useMemo((): Record<string, string> | undefined => {
+    if (!channel?.headers) return undefined;
+    return Object.keys(channel.headers).length > 0
+      ? channel.headers
+      : undefined;
+  }, [channel?.headers]);
+
+  if (!unlocked) {
+    return (
+      <View style={[styles.container, { width, height }]}>
+        <StatusBar hidden translucent backgroundColor="transparent" />
+      </View>
+    );
+  }
+
+  if (!channel) {
+    return (
+      <View style={[styles.container, styles.errorContainer]}>
+        <StatusBar hidden />
+        <Ionicons name="alert-circle" size={40} color={theme.error} />
+        <ThemedText type="h4" style={styles.errorTitle}>
+          Channel Not Found
+        </ThemedText>
+        <Pressable
+          onPress={handleBack}
+          style={[
+            styles.errorButton,
+            { backgroundColor: theme.primary + "30" },
+          ]}
+          focusable={true}
+          hasTVPreferredFocus={true}
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
+        >
+          <ThemedText type="body" style={{ color: theme.primary }}>
+            Go Back
+          </ThemedText>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.container, { width, height }]}>
+      <StatusBar hidden translucent backgroundColor="transparent" />
+      <AdvancedVideoPlayer
+        source={channel.url}
+        title={channel.name}
+        subtitle={epgSubtitle}
+        poster={channel.logo}
+        channelId={channel.id}
+        autoPlay={settings.autoPlay}
+        backgroundPlay={settings.backgroundPlay}
+        playerEngine={settings.playerEngine}
+        drm={drmConfig}
+        headers={streamHeaders}
+        qualities={DEFAULT_QUALITIES}
+        recentChannels={recentChannelObjects}
+        onError={handleError}
+        onBack={handleBack}
+        onNext={() => handleChannelNav("next")}
+        onPrevious={() => handleChannelNav("prev")}
+        onChannelSelect={handleChannelSelect}
+        isFavorite={isFavorite}
+        onFavoritePress={handleFavorite}
+        isLive={channel.isLive !== false}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: "#000000",
+    overflow: "hidden",
+  },
+  errorContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  errorTitle: {
+    marginTop: Spacing.md,
+    color: "#FFFFFF",
+  },
+  errorButton: {
+    marginTop: Spacing.xl,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.sm,
+  },
+});

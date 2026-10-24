@@ -1,0 +1,54 @@
+package expo.modules.tvplayer
+
+import android.view.SurfaceView
+import android.view.TextureView
+
+interface PlayerController {
+
+    interface Callbacks {
+        fun onReady()
+        fun onError(message: String)
+        fun onPlayingChanged(isPlaying: Boolean)
+        fun onBufferingChanged(isBuffering: Boolean)
+        fun onPositionChanged(positionMs: Long, durationMs: Long)
+        fun onTracksChanged(audioTracks: List<Map<String, Any>>, subtitleTracks: List<Map<String, Any>>)
+        fun onVideoSizeChanged(width: Int, height: Int, pixelWidthHeightRatio: Float)
+    }
+
+    fun load(
+        url: String,
+        headers: Map<String, String>,
+        drmType: String?,
+        drmLicenseUrl: String?,
+        drmLicenseKey: String? = null,
+        drmHeaders: Map<String, String>?,
+        drmPssh: String? = null,
+        autoPlay: Boolean,
+    )
+
+    fun setVideoSurfaceView(surfaceView: SurfaceView)
+    fun setTextureView(textureView: TextureView)
+    fun clearVideoSurface()
+
+    /**
+     * Optional: hand an ExoPlayer the media3 PlayerView so it renders /
+     * surface-lifecycles through PlayerView (used for robust PiP). Engines
+     * that don't support it (VLC) simply ignore this.
+     */
+    fun setPlayerView(playerView: androidx.media3.ui.PlayerView?) {}
+
+    fun play()
+    fun pause()
+    fun seekTo(positionMs: Long)
+    fun setVolume(volume: Float)
+
+    fun selectAudioTrack(groupIndex: Int, trackIndex: Int)
+    fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int)
+
+    fun getCurrentPosition(): Long
+    fun getDuration(): Long
+    fun isPlaying(): Boolean
+
+    fun setCallbacks(callbacks: Callbacks)
+    fun release()
+}

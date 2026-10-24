@@ -1,0 +1,759 @@
+import { Channel, Playlist, DRMInfo } from "@/types/playlist";
+import { fetchPlaylistNative } from "../../modules/tv-player/src/index";
+
+function generateId(): string {
+  return (
+    Math.random().toString(36).substring(2, 15) +
+    Math.random().toString(36).substring(2, 15)
+  );
+}
+
+/** DJB2 hash of a string → unsigned 32-bit → base36 string. */
+function hashStr(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) ^ s.charCodeAt(i);
+    h = h >>> 0; // keep unsigned 32-bit
+  }
+  return h;
+}
+
+/**
+ * Stable ID derived from a channel's stream URL so it survives playlist
+ * refreshes. When two channels share the same URL (e.g. the same ClearKey
+ * test vector referenced by two entries), the URL-only id collides and
+ * list renderers that key by id (FlashList) silently drop the duplicate.
+ * Callers resolve collisions via {@link resolveChannelId}.
+ */
+function stableChannelId(url: string): string {
+  return "ch_" + hashStr(url).toString(36);
+}
+
+/**
+ * Derive a unique, stable id for a channel. Defaults to the URL-derived id;
+ * on collision (same URL reused by another channel) falls back to hashing
+ * the URL together with the channel name so both channels remain visible.
+ * The name is stable across refreshes, so the fallback id is stable too.
+ */
+function resolveChannelId(
+  url: string,
+  name: string,
+  seen: Set<string>,
+): string {
+  let id = stableChannelId(url);
+  if (seen.has(id)) {
+    id = "ch_" + hashStr(`${url}|${name}`).toString(36);
+  }
+  // Defensive: if the name-derived id also collides, perturb until unique.
+  let n = 2;
+  while (seen.has(id)) {
+    id = "ch_" + hashStr(`${url}|${name}|${n}`).toString(36);
+    n++;
+  }
+  seen.add(id);
+  return id;
+}
+
+/**
+ * Parses a single `#KODIPROP:` directive line.
+ *
+ * Strips ONLY the `#KODIPROP:` prefix (one colon, immediately after the
+ * tag name), then splits the remainder on the FIRST `=`. The value may
+ * itself contain `=` or `:` characters (e.g. ClearKey `KID:KEY` pairs or
+ * a full ClearKey JSON document), and is preserved verbatim.
+ *
+ * Returns null for lines that are not `#KODIPROP:` directives or that lack
+ * an `=` separator.
+ */
+export function parseKodiProp(
+  line: string,
+): { key: string; value: string } | null {
+  const prefix = "#KODIPROP:";
+  if (!line.startsWith(prefix)) return null;
+  const rest = line.slice(prefix.length);
+  const eq = rest.indexOf("=");
+  if (eq === -1) return null;
+  return {
+    key: rest.slice(0, eq).trim(),
+    value: rest.slice(eq + 1).trim(),
+  };
+}
+
+function parseDRM(
+  lines: string[],
+  currentIndex: number,
+  _url: string,
+): { drm?: DRMInfo; headers?: Record<string, string> } {
+  const drm: DRMInfo = {};
+  const headers: Record<string, string> = {};
+  let foundDRM = false;
+  let foundHeaders = false;
+
+  // Search both before AND after the URL line within a reasonable window.
+  // Some providers place #KODIPROP tags after #EXTINF but before the URL,
+  // while others may interleave them with other metadata lines.
+  // We scan 30 lines before the URL and up to 5 lines after (the URL itself
+  // is at currentIndex, so lines[currentIndex] is the URL — skip it).
+  const windowStart = Math.max(0, currentIndex - 30);
+  const windowEnd = Math.min(lines.length - 1, currentIndex + 5);
+
+  for (let i = windowStart; i <= windowEnd; i++) {
+    if (i === currentIndex) continue; // skip the URL line itself
+    const line = lines[i];
+
+    // #KODIPROP directives — parse via parseKodiProp so the value is split
+    // only on the first '=' and any ':' in the value (ClearKey KID:KEY pairs,
+    // ClearKey JSON documents, URL schemes like https://...) is preserved.
+    const kodi = parseKodiProp(line);
+    if (kodi) {
+      if (kodi.key === "inputstream.adaptive.license_type") {
+        const typeRaw = kodi.value.toLowerCase();
+        if (typeRaw.includes("widevine")) drm.type = "widevine";
+        else if (typeRaw.includes("playready")) drm.type = "playready";
+        else if (typeRaw.includes("clearkey")) drm.type = "clearkey";
+        else if (typeRaw.includes("fairplay")) drm.type = "fairplay";
+        else {
+          // Unknown DRM type — set a flag so we know DRM was declared even
+          // if we can't map it. Callers will see foundDRM=true but
+          // drm.type=undefined and can handle it (e.g. log a warning) rather
+          // than silently proceeding.
+        }
+        foundDRM = true;
+      } else if (kodi.key === "inputstream.adaptive.license_key") {
+        // Value may be a URL (Widevine/PlayReady license server) or an
+        // embedded key (ClearKey KID:KEY or JSON). Route accordingly.
+        if (
+          kodi.value.startsWith("http://") ||
+          kodi.value.startsWith("https://")
+        ) {
+          drm.licenseServer = kodi.value;
+        } else {
+          drm.licenseKey = kodi.value;
+        }
+        foundDRM = true;
+      } else if (kodi.key === "inputstream.adaptive.stream_headers") {
+        // Format: key1=value1&key2=value2&key3=value3
+        // Values may contain '=' or ':' so split only on first '='.
+        const pairs = kodi.value.split("&");
+        for (const pair of pairs) {
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx === -1) continue;
+          const hKey = pair.slice(0, eqIdx).trim();
+          const hVal = pair.slice(eqIdx + 1).trim();
+          if (hKey && hVal) {
+            // Normalize common header names to match existing conventions
+            const lower = hKey.toLowerCase();
+            const normalized =
+              lower === "user-agent"
+                ? "User-Agent"
+                : lower === "referer"
+                  ? "Referer"
+                  : lower === "origin"
+                    ? "Origin"
+                    : hKey;
+            headers[normalized] = hVal;
+            foundHeaders = true;
+          }
+        }
+      }
+      continue; // KODIPROP line handled — no other parsing applies
+    }
+
+    if (line.includes("#EXTVLCOPT:http-user-agent=")) {
+      headers["User-Agent"] = line.split("=").slice(1).join("=").trim();
+      foundHeaders = true;
+    }
+
+    if (line.includes("#EXTVLCOPT:http-referrer=")) {
+      headers["Referer"] = line.split("=").slice(1).join("=").trim();
+      foundHeaders = true;
+    }
+
+    if (line.includes("#EXTVLCOPT:http-origin=")) {
+      headers["Origin"] = line.split("=").slice(1).join("=").trim();
+      foundHeaders = true;
+    }
+
+    // #EXTHTTP — JSON format headers (OTT Navigator compatibility)
+    // Example: #EXTHTTP:{"User-Agent":"Chrome","Referer":"https://example.com"}
+    if (line.startsWith("#EXTHTTP:")) {
+      const jsonStr = line.slice("#EXTHTTP:".length).trim();
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (typeof parsed === "object" && parsed !== null) {
+          for (const [key, val] of Object.entries(parsed)) {
+            if (typeof val === "string" && val) {
+              headers[key] = val;
+              foundHeaders = true;
+            }
+          }
+        }
+      } catch {
+        // Malformed JSON — skip silently
+      }
+    }
+  }
+
+  // NOTE: Akamai token-auth parameters (`hdnea`, `hdntl`) are CDN access
+  // tokens — they protect the stream delivery at the CDN layer and are NOT
+  // related to EME/CDM DRM (Widevine/PlayReady/ClearKey). We deliberately do
+  // NOT treat them as a DRM signal. If present they should be forwarded as
+  // request headers or kept as URL query parameters, not used to configure a
+  // DRM session. Removed previous incorrect behaviour that set drm.type =
+  // "widevine" when hdnea was detected.
+
+  // Attach headers to DRM object for license requests
+  if (foundDRM && foundHeaders) {
+    drm.headers = headers;
+  }
+
+  return {
+    drm: foundDRM ? drm : undefined,
+    headers: foundHeaders ? headers : undefined,
+  };
+}
+
+/**
+ * Parses VLC-style URL headers (e.g., `http://stream.url|User-Agent:foo|Referer:bar`)
+ * Returns the clean URL and a headers record.
+ */
+function parseUrlHeaders(url: string): {
+  cleanUrl: string;
+  headers: Record<string, string>;
+} {
+  const headers: Record<string, string> = {};
+  let cleanUrl = url;
+
+  const pipeIndex = url.indexOf("|");
+  if (pipeIndex !== -1) {
+    cleanUrl = url.substring(0, pipeIndex);
+    const headerPart = url.substring(pipeIndex + 1);
+    const headerEntries = headerPart.split("|");
+    for (const entry of headerEntries) {
+      const colonIndex = entry.indexOf(":");
+      if (colonIndex !== -1) {
+        const headerName = entry.substring(0, colonIndex).trim();
+        const headerValue = entry.substring(colonIndex + 1).trim();
+        if (headerName && headerValue) {
+          // Normalize common header names
+          const normalized =
+            headerName.toLowerCase() === "user-agent"
+              ? "User-Agent"
+              : headerName.toLowerCase() === "referer"
+                ? "Referer"
+                : headerName.toLowerCase() === "origin"
+                  ? "Origin"
+                  : headerName;
+          headers[normalized] = headerValue;
+        }
+      }
+    }
+  }
+
+  return { cleanUrl, headers };
+}
+
+function parseExtInf(line: string): Partial<Channel> {
+  const channel: Partial<Channel> = {};
+
+  const tvgIdMatch = line.match(/tvg-id="([^"]*)"/i);
+  if (tvgIdMatch) channel.tvgId = tvgIdMatch[1];
+
+  const tvgNameMatch = line.match(/tvg-name="([^"]*)"/i);
+  if (tvgNameMatch) channel.tvgName = tvgNameMatch[1];
+
+  const tvgLogoMatch = line.match(/tvg-logo="([^"]*)"/i);
+  if (tvgLogoMatch) channel.logo = tvgLogoMatch[1];
+
+  const groupMatch = line.match(/group-title="([^"]*)"/i);
+  if (groupMatch) channel.group = groupMatch[1];
+
+  const qualityMatch = line.match(
+    /\b(4K|UHD|FHD|HD|SD|720p|1080p|480p|360p)\b/i,
+  );
+  if (qualityMatch) channel.quality = qualityMatch[1].toUpperCase();
+
+  // Extract http-user-agent and http-referrer attributes from EXTINF line
+  // (some playlists put them here instead of using #EXTVLCOPT lines)
+  const userAgentMatch = line.match(/http-user-agent="([^"]*)"/i);
+  if (userAgentMatch) {
+    channel.headers = channel.headers || {};
+    channel.headers["User-Agent"] = userAgentMatch[1];
+  }
+
+  const referrerMatch = line.match(/http-referrer="([^"]*)"/i);
+  if (referrerMatch) {
+    channel.headers = channel.headers || {};
+    channel.headers["Referer"] = referrerMatch[1];
+  }
+
+  const nameMatch = line.match(/,(.+)$/);
+  if (nameMatch) channel.name = nameMatch[1].trim();
+
+  return channel;
+}
+
+export function parseM3U(
+  content: string,
+  playlistName: string = "My Playlist",
+): Playlist {
+  const lines = content.split("\n").map((line) => line.trim());
+  const channels: Channel[] = [];
+  const categoriesSet = new Set<string>();
+  // Track channel ids we've already emitted so duplicate stream URLs in the
+  // playlist don't collapse into one entry (FlashList keys by id and would
+  // silently drop the duplicate). resolveChannelId falls back to a
+  // name-derived id on collision.
+  const seenIds = new Set<string>();
+
+  let currentChannel: Partial<Channel> = {};
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith("#EXTINF:")) {
+      currentChannel = parseExtInf(line);
+    } else if (line && !line.startsWith("#") && currentChannel.name) {
+      const { drm, headers: drmHeaders } = parseDRM(lines, i, line);
+
+      const { cleanUrl, headers: urlHeaders } = parseUrlHeaders(line);
+
+      // Merge headers from all sources (priority: URL syntax > EXTVLCOPT > EXTINF attributes)
+      const extinfHeaders = currentChannel.headers || {};
+      const mergedHeaders = {
+        ...extinfHeaders,
+        ...(drmHeaders || {}),
+        ...urlHeaders,
+      };
+      const finalHeaders =
+        Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+
+      const name = currentChannel.name || "Unknown Channel";
+      const channel: Channel = {
+        id: resolveChannelId(cleanUrl, name, seenIds),
+        name,
+        url: cleanUrl,
+        logo: currentChannel.logo,
+        group: currentChannel.group || "Uncategorized",
+        tvgId: currentChannel.tvgId,
+        tvgName: currentChannel.tvgName,
+        quality: currentChannel.quality,
+        drm: drm,
+        headers: finalHeaders,
+        isLive: true,
+      };
+
+      channels.push(channel);
+      categoriesSet.add(channel.group);
+      currentChannel = {};
+    }
+  }
+
+  const categories = Array.from(categoriesSet).sort((a, b) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
+
+  return {
+    id: generateId(),
+    name: playlistName,
+    channels,
+    categories,
+    lastUpdated: Date.now(),
+    epgUrls: extractEpgUrls(content),
+  };
+}
+
+function extractEpgUrls(content: string): string[] {
+  const firstLines = content.slice(0, 8192).split("\n").slice(0, 30).join("\n");
+  const urls: string[] = [];
+  const attrRegex =
+    /(?:url-tvg|x-tvg-url|tvg-url)\s*=\s*(?:"([^"]+)"|'([^']+)'|(\S+))/gi;
+  let m: RegExpExecArray | null;
+  while ((m = attrRegex.exec(firstLines)) !== null) {
+    const raw = m[1] ?? m[2] ?? m[3] ?? "";
+    for (const part of raw.split(/[\s,;|]+/)) {
+      const u = part.trim().replace(/^["']|["']$/g, "");
+      if (u && (u.startsWith("http://") || u.startsWith("https://"))) {
+        if (!urls.includes(u)) urls.push(u);
+      }
+    }
+  }
+  return urls;
+}
+
+export const PRYSM_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+async function fetchPlaylistContent(url: string): Promise<string | null> {
+  try {
+    // Try native OkHttp fetch first (properly handles User-Agent on Android)
+    const result = await fetchPlaylistNative(url);
+    if (result.success) {
+      const content = result.content;
+      if (content.includes("#EXTM3U") || content.includes("#EXTINF")) {
+        return content;
+      }
+    }
+  } catch {
+    // Native fetch unavailable or failed, fall through to JS fetch
+  }
+
+  // Fallback: JS fetch (may strip User-Agent on some RN versions)
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": PRYSM_USER_AGENT,
+        Accept: "*/*",
+      },
+    });
+    if (response.ok) {
+      const content = await response.text();
+      if (content.includes("#EXTM3U") || content.includes("#EXTINF")) {
+        return content;
+      }
+    }
+  } catch {
+    // Both fetch methods failed
+  }
+  return null;
+}
+
+export async function fetchAndParseM3U(
+  url: string,
+  customName?: string,
+): Promise<Playlist> {
+  const content = await fetchPlaylistContent(url);
+
+  if (!content) {
+    throw new Error(
+      "Could not fetch playlist. The server may be blocking requests or require specific app authentication.",
+    );
+  }
+
+  const urlParts = url.split("/");
+  const fileName = urlParts[urlParts.length - 1]
+    .split("?")[0]
+    .replace(".m3u", "")
+    .replace(".m3u8", "");
+  const playlistName = customName || fileName || "Remote Playlist";
+
+  const playlist = parseM3U(content, playlistName);
+  playlist.url = url;
+
+  return playlist;
+}
+
+/**
+ * Parses PLS (Playlist) format
+ * Example:
+ * [playlist]
+ * NumberOfEntries=2
+ * File1=http://stream1.url
+ * Title1=Channel 1
+ * Length1=-1
+ */
+export function parsePLS(
+  content: string,
+  playlistName: string = "My Playlist",
+): Playlist {
+  const lines = content.split("\n").map((line) => line.trim());
+  const channels: Channel[] = [];
+  const categoriesSet = new Set<string>();
+
+  let currentTitle = "";
+  let currentGroup = "";
+
+  for (const line of lines) {
+    if (line.toLowerCase().startsWith("file")) {
+      const urlMatch = line.match(/file\d*=(.+)/i);
+      if (urlMatch) {
+        const url = urlMatch[1].trim();
+        const { cleanUrl, headers: urlHeaders } = parseUrlHeaders(url);
+        const channel: Channel = {
+          id: stableChannelId(cleanUrl),
+          name: currentTitle || "Unknown Channel",
+          url: cleanUrl,
+          logo: undefined,
+          group: currentGroup || "Uncategorized",
+          tvgId: undefined,
+          tvgName: undefined,
+          quality: undefined,
+          drm: undefined,
+          headers: Object.keys(urlHeaders).length > 0 ? urlHeaders : undefined,
+          isLive: true,
+        };
+        channels.push(channel);
+        categoriesSet.add(channel.group);
+        currentTitle = "";
+      }
+    } else if (line.toLowerCase().startsWith("title")) {
+      const titleMatch = line.match(/title\d*=(.+)/i);
+      if (titleMatch) {
+        currentTitle = titleMatch[1].trim();
+        // Try to extract group from title if it has a format like "Group - Channel"
+        const groupMatch = currentTitle.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+        if (groupMatch) {
+          currentGroup = groupMatch[1].trim();
+          currentTitle = groupMatch[2].trim();
+        }
+      }
+    } else if (line.toLowerCase().startsWith("group")) {
+      const groupMatch = line.match(/group\d*=(.+)/i);
+      if (groupMatch) {
+        currentGroup = groupMatch[1].trim();
+      }
+    }
+  }
+
+  const categories = Array.from(categoriesSet).sort((a, b) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
+
+  return {
+    id: generateId(),
+    name: playlistName,
+    channels,
+    categories,
+    lastUpdated: Date.now(),
+  };
+}
+
+/**
+ * Parses XSPF (XML Shareable Playlist Format) format
+ * Example:
+ * <?xml version="1.0" encoding="UTF-8"?>
+ * <playlist>
+ *   <trackList>
+ *     <track>
+ *       <title>Channel 1</title>
+ *       <location>http://stream1.url</location>
+ *       <image>http://logo.url</image>
+ *     </track>
+ *   </trackList>
+ * </playlist>
+ */
+export function parseXSPF(
+  content: string,
+  playlistName: string = "My Playlist",
+): Playlist {
+  const channels: Channel[] = [];
+  const categoriesSet = new Set<string>();
+
+  // Simple XML parsing without DOM (works in React Native)
+  const trackRegex = /<track>([\s\S]*?)<\/track>/gi;
+  let match;
+
+  while ((match = trackRegex.exec(content)) !== null) {
+    const trackContent = match[1];
+
+    const titleMatch = trackContent.match(/<title>([^<]*)<\/title>/i);
+    const locationMatch = trackContent.match(/<location>([^<]*)<\/location>/i);
+    const imageMatch = trackContent.match(/<image>([^<]*)<\/image>/i);
+    const creatorMatch = trackContent.match(/<creator>([^<]*)<\/creator>/i);
+    const annotationMatch = trackContent.match(
+      /<annotation>([^<]*)<\/annotation>/i,
+    );
+
+    if (locationMatch) {
+      const url = locationMatch[1].trim();
+      const { cleanUrl, headers: urlHeaders } = parseUrlHeaders(url);
+
+      let group = creatorMatch ? creatorMatch[1].trim() : "Uncategorized";
+      if (annotationMatch && !creatorMatch) {
+        group = annotationMatch[1].trim();
+      }
+
+      const channel: Channel = {
+        id: stableChannelId(cleanUrl),
+        name: titleMatch ? titleMatch[1].trim() : "Unknown Channel",
+        url: cleanUrl,
+        logo: imageMatch ? imageMatch[1].trim() : undefined,
+        group,
+        tvgId: undefined,
+        tvgName: undefined,
+        quality: undefined,
+        drm: undefined,
+        headers: Object.keys(urlHeaders).length > 0 ? urlHeaders : undefined,
+        isLive: true,
+      };
+      channels.push(channel);
+      categoriesSet.add(channel.group);
+    }
+  }
+
+  const categories = Array.from(categoriesSet).sort((a, b) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
+
+  return {
+    id: generateId(),
+    name: playlistName,
+    channels,
+    categories,
+    lastUpdated: Date.now(),
+  };
+}
+
+/**
+ * Detects playlist format and parses accordingly
+ */
+export function parsePlaylist(
+  content: string,
+  playlistName: string = "My Playlist",
+): Playlist {
+  const trimmed = content.trim();
+
+  // Check for M3U/M3U8
+  if (trimmed.startsWith("#EXTM3U") || trimmed.includes("#EXTINF:")) {
+    return parseM3U(content, playlistName);
+  }
+
+  // Check for PLS
+  if (
+    trimmed.toLowerCase().includes("[playlist]") ||
+    trimmed.toLowerCase().includes("numberofentries=")
+  ) {
+    return parsePLS(content, playlistName);
+  }
+
+  // Check for XSPF (XML-based)
+  // The XSPF standard uses <trackList> (camelCase) — not <tracklist>.
+  if (
+    trimmed.includes("<playlist") &&
+    (trimmed.includes("<trackList>") || trimmed.includes("<tracklist>"))
+  ) {
+    return parseXSPF(content, playlistName);
+  }
+
+  // Try to detect JSON-based playlists (some IPTV providers use JSON)
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parseJSONArray(parsed, playlistName);
+    }
+    if (parsed.channels && Array.isArray(parsed.channels)) {
+      return parseJSONArray(parsed.channels, playlistName);
+    }
+  } catch {
+    // Not JSON
+  }
+
+  throw new Error(
+    "Unsupported playlist format. Supported formats: M3U, M3U8, PLS, XSPF, JSON",
+  );
+}
+
+/**
+ * Parses a JSON array of channels
+ * Expected format: [{ name, url, logo?, group? }, ...]
+ */
+function parseJSONArray(
+  items: any[],
+  playlistName: string = "My Playlist",
+): Playlist {
+  const channels: Channel[] = [];
+  const categoriesSet = new Set<string>();
+
+  for (const item of items) {
+    if (!item.url) continue;
+
+    const url = typeof item.url === "string" ? item.url : "";
+    const { cleanUrl, headers: urlHeaders } = parseUrlHeaders(url);
+
+    const channel: Channel = {
+      id: stableChannelId(cleanUrl),
+      name: item.name || item.title || "Unknown Channel",
+      url: cleanUrl,
+      logo: item.logo || item.image || item.tvgLogo || undefined,
+      group: item.group || item.category || item.groupTitle || "Uncategorized",
+      tvgId: item.tvgId || item.epgId || undefined,
+      tvgName: item.tvgName || undefined,
+      quality: item.quality || undefined,
+      drm: item.drm || undefined,
+      headers: Object.keys(urlHeaders).length > 0 ? urlHeaders : undefined,
+      isLive: item.isLive !== false,
+    };
+    channels.push(channel);
+    categoriesSet.add(channel.group);
+  }
+
+  const categories = Array.from(categoriesSet).sort((a, b) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
+
+  return {
+    id: generateId(),
+    name: playlistName,
+    channels,
+    categories,
+    lastUpdated: Date.now(),
+  };
+}
+
+/**
+ * Fetches and parses any playlist format
+ */
+export async function fetchAndParsePlaylist(
+  url: string,
+  customName?: string,
+): Promise<Playlist> {
+  let content: string | null = null;
+
+  // Try native OkHttp fetch first (properly handles User-Agent on Android)
+  try {
+    const result = await fetchPlaylistNative(url);
+    if (result.success) {
+      content = result.content;
+    }
+  } catch {
+    // Native fetch unavailable, fall through to JS fetch
+  }
+
+  // Fallback: JS fetch
+  if (!content) {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": PRYSM_USER_AGENT,
+        Accept: "*/*",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        "Could not fetch playlist. The server may be blocking requests or require specific app authentication.",
+      );
+    }
+
+    content = await response.text();
+  }
+
+  if (!content) {
+    throw new Error(
+      "Could not fetch playlist. The server may be blocking requests or require specific app authentication.",
+    );
+  }
+
+  const urlParts = url.split("/");
+  const fileName = urlParts[urlParts.length - 1]
+    .split("?")[0]
+    .replace(/\.(m3u8?|pls|xspf|json)$/i, "");
+  const playlistName = customName || fileName || "Remote Playlist";
+
+  try {
+    const playlist = parsePlaylist(content, playlistName);
+    playlist.url = url;
+    return playlist;
+  } catch (parseError: any) {
+    throw new Error(
+      `Failed to parse playlist: ${parseError.message || "Unknown parsing error"}`,
+    );
+  }
+}

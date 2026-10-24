@@ -1,0 +1,2364 @@
+import React, { useState, useCallback, useEffect, useMemo } from "react";
+import {
+  StyleSheet,
+  View,
+  ScrollView,
+  Modal,
+  Pressable,
+  TextInput,
+  useWindowDimensions,
+  Platform,
+  ViewStyle,
+  ActivityIndicator,
+  Linking,
+  Alert,
+  AppState,
+  AppStateStatus,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import * as IntentLauncher from "expo-intent-launcher";
+import Constants from "expo-constants";
+import * as Application from "expo-application";
+
+import { ThemedView } from "@/components/ThemedView";
+import { ThemedText } from "@/components/ThemedText";
+import { SettingsRow } from "@/components/SettingsRow";
+import { TVFocusablePressable } from "@/components/TVFocusablePressable";
+import { Button } from "@/components/Button";
+import { useTheme } from "@/hooks/useTheme";
+import { usePlaylist } from "@/context/PlaylistContext";
+import { useEpg } from "@/context/EpgContext";
+import { useResponsive } from "@/hooks/useResponsive";
+import { Spacing, BorderRadius } from "@/constants/theme";
+import { RootStackParamList } from "@/navigation/RootStackNavigator";
+import { Toast } from "@/components/Toast";
+import { ChannelLockSettings } from "@/components/settings/ChannelLockSettings";
+import { CategoryVisibility } from "@/components/settings/CategoryVisibility";
+import { isDynamicColorSupported } from "../../modules/dynamic-color/src";
+import {
+  checkForUpdate,
+  downloadApk,
+  getDownloadedApkPath,
+  clearDownloadedApk,
+  getApkContentUri,
+  UpdateInfo,
+} from "@/utils/updateChecker";
+import * as FileSystemLegacy from "expo-file-system/legacy";
+
+type SettingsNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
+const SEED_PRESETS: { name: string; value: string }[] = [
+  { name: "Teal", value: "#009688" },
+  { name: "Blue", value: "#2196F3" },
+  { name: "Indigo", value: "#3F51B5" },
+  { name: "Purple", value: "#9C27B0" },
+  { name: "Pink", value: "#E91E63" },
+  { name: "Red", value: "#F44336" },
+  { name: "Orange", value: "#FF9800" },
+  { name: "Yellow", value: "#FFC107" },
+  { name: "Green", value: "#4CAF50" },
+  { name: "Cyan", value: "#00BCD4" },
+  { name: "Brown", value: "#795548" },
+];
+
+function FocusableOption({
+  onPress,
+  isSelected,
+  style,
+  children,
+  accessibilityLabel,
+  hasTVPreferredFocus,
+}: {
+  onPress: () => void;
+  isSelected?: boolean;
+  style?: ViewStyle;
+  children: React.ReactNode;
+  accessibilityLabel?: string;
+  hasTVPreferredFocus?: boolean;
+}) {
+  const { theme } = useTheme();
+  return (
+    <TVFocusablePressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      baseStyle={[
+        styles.modalOption,
+        isSelected
+          ? { backgroundColor: theme.primary + "20" }
+          : { backgroundColor: "transparent" },
+        style,
+      ]}
+      focusedStyle={[
+        styles.modalOptionFocused,
+        { backgroundColor: theme.primary + "30" },
+      ]}
+    >
+      {children}
+    </TVFocusablePressable>
+  );
+}
+
+function FocusablePressable({
+  onPress,
+  baseStyle,
+  focusedStyle,
+  children,
+  hitSlop,
+  accessibilityLabel,
+  hasTVPreferredFocus,
+}: {
+  onPress: () => void;
+  baseStyle: ViewStyle | ViewStyle[];
+  focusedStyle: ViewStyle | ViewStyle[];
+  children: React.ReactNode;
+  hitSlop?: number;
+  accessibilityLabel?: string;
+  hasTVPreferredFocus?: boolean;
+}) {
+  return (
+    <TVFocusablePressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      hitSlop={hitSlop}
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      baseStyle={baseStyle}
+      focusedStyle={focusedStyle}
+    >
+      {children}
+    </TVFocusablePressable>
+  );
+}
+
+const VIDEO_QUALITY_OPTIONS = [
+  { label: "Auto", value: "auto" as const },
+  { label: "High", value: "high" as const },
+  { label: "Medium", value: "medium" as const },
+  { label: "Low", value: "low" as const },
+];
+
+const AUTO_REFRESH_OPTIONS = [
+  { label: "Off", value: "off" as const },
+  { label: "Every 5 minutes", value: "5min" as const },
+  { label: "Every 15 minutes", value: "15min" as const },
+  { label: "Every day", value: "1day" as const },
+  { label: "Custom", value: "custom" as const },
+];
+
+const TEXT_SIZE_OPTIONS = [
+  { label: "Small", value: "small" as const },
+  { label: "Medium", value: "medium" as const },
+  { label: "Large", value: "large" as const },
+];
+
+const PLAYER_ENGINE_OPTIONS = [
+  {
+    label: "ExoPlayer (Media3)",
+    value: "exoplayer" as const,
+    desc: "Default — best for most streams",
+  },
+  {
+    label: "VLC Player",
+    value: "vlc" as const,
+    desc: "Fallback — wider codec support",
+  },
+];
+
+const TV_INTERFACE_OPTIONS = [
+  {
+    label: "Auto (TV Devices)",
+    value: "auto" as const,
+    desc: "Activates 3-column UI on TV devices",
+  },
+  {
+    label: "Always On (TV UI)",
+    value: "tv" as const,
+    desc: "Force SafeTV 3-column TV UI",
+  },
+  {
+    label: "Standard (Mobile/Tablet)",
+    value: "standard" as const,
+    desc: "Standard tabs and mobile layout",
+  },
+];
+
+export default function SettingsScreen({
+  embedded = false,
+}: {
+  /**
+   * True when rendered under chrome that already accounts for the top safe
+   * area (e.g. the TV top nav). Prevents a doubled top inset.
+   */
+  embedded?: boolean;
+} = {}) {
+  const insets = useSafeAreaInsets();
+  const navigation = useNavigation<SettingsNavigationProp>();
+  const {
+    theme,
+    isDark,
+    themeMode,
+    dynamicColors,
+    seedColor,
+    setThemeMode,
+    setDynamicColors,
+    setSeedColor,
+  } = useTheme();
+  const { width } = useWindowDimensions();
+  const { isUltraWide } = useResponsive();
+
+  const dynamicSupported = useMemo(() => isDynamicColorSupported(), []);
+
+  const {
+    playlist,
+    playlists,
+    activePlaylistId,
+    settings,
+    updateSettings,
+    updatePlaylistInfo,
+    switchPlaylist,
+    deletePlaylist,
+    clearAllData,
+    isLoadingPlaylist,
+    refreshPlaylist,
+  } = usePlaylist();
+
+  const [showQualityModal, setShowQualityModal] = useState(false);
+  const [showThemeModal, setShowThemeModal] = useState(false);
+  const [showSeedModal, setShowSeedModal] = useState(false);
+  const [showAutoRefreshModal, setShowAutoRefreshModal] = useState(false);
+  const [showTextSizeModal, setShowTextSizeModal] = useState(false);
+  const [showPlayerEngineModal, setShowPlayerEngineModal] = useState(false);
+  const [showTvModeModal, setShowTvModeModal] = useState(false);
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [showDeletePlaylistModal, setShowDeletePlaylistModal] = useState(false);
+  const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
+  const [showEditPlaylistModal, setShowEditPlaylistModal] = useState(false);
+  const [playlistToDelete, setPlaylistToDelete] = useState<string | null>(null);
+  const [playlistToEdit, setPlaylistToEdit] = useState<string | null>(null);
+  const [editPlaylistName, setEditPlaylistName] = useState("");
+  const [editPlaylistUrl, setEditPlaylistUrl] = useState("");
+  const [showEpgUrlModal, setShowEpgUrlModal] = useState(false);
+  const [epgUrlText, setEpgUrlText] = useState("");
+  const epgState = useEpg();
+  const epg = epgState;
+
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [downloadingApk, setDownloadingApk] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [installingApk, setInstallingApk] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showToast, setShowToast] = useState(false);
+  const [customMinutesText, setCustomMinutesText] = useState(
+    String(settings.customRefreshMinutes),
+  );
+
+  useEffect(() => {
+    if (showAutoRefreshModal) {
+      setCustomMinutesText(String(settings.customRefreshMinutes));
+    }
+  }, [showAutoRefreshModal, settings.customRefreshMinutes]);
+
+  const isTV = Platform.isTV;
+  const isFdroid = Constants.expoConfig?.extra?.isFdroid === true;
+  const appVersion = Application.nativeApplicationVersion || "1.5.0";
+  const useColumns = width > 700;
+  // On TV and very wide screens show two columns of settings side by side
+  const useTwoColumns = isTV || width > 900;
+
+  useEffect(() => {
+    if (isFdroid) return;
+    const initializeUpdateCheck = async () => {
+      const info = await checkForUpdate();
+      if (info) {
+        setUpdateInfo(info);
+      }
+    };
+    initializeUpdateCheck();
+
+    // Listen for app state changes to handle install result
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === "active" && installingApk) {
+        // App returned to foreground after installer
+        setInstallingApk(false);
+        setShowUpdateModal(false);
+        // Re-check for updates to see if version changed
+        checkForUpdate().then((info) => {
+          if (info) {
+            setUpdateInfo(info);
+            if (!info.available) {
+              Alert.alert(
+                "Update Successful",
+                "App has been updated to the latest version.",
+              );
+            }
+          }
+        });
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+    return () => subscription.remove();
+  }, [installingApk, isFdroid]);
+
+  const handleToggleAutoPlay = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ autoPlay: value });
+  };
+
+  const handleToggleBackgroundPlay = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ backgroundPlay: value });
+  };
+
+  const handleToggleCategories = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ showCategoryFilter: value });
+  };
+
+  const handleToggleRememberCategory = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ rememberLastCategory: value });
+  };
+
+  const handleToggleEpg = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ showEpg: value, epgUserSet: true });
+  };
+
+  const handleToggleEpgCards = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ showEpgInCards: value });
+  };
+
+  const handleToggleEpgPlayer = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ showEpgInPlayer: value });
+  };
+
+  const handleOpenEpgUrlModal = () => {
+    const current = activePlaylistId
+      ? (settings.epgUrlOverrides[activePlaylistId] ?? "")
+      : "";
+    setEpgUrlText(current);
+    setShowEpgUrlModal(true);
+  };
+
+  const handleSaveEpgUrl = async () => {
+    if (!activePlaylistId) {
+      setShowEpgUrlModal(false);
+      return;
+    }
+    const v = epgUrlText.trim();
+    const next = { ...settings.epgUrlOverrides };
+    if (v) next[activePlaylistId] = v;
+    else delete next[activePlaylistId];
+    await updateSettings({ epgUrlOverrides: next, epgUserSet: true });
+    setShowEpgUrlModal(false);
+    if (settings.showEpg) void epg.refreshEpg(true);
+  };
+
+  const handleRefreshEpg = async () => {
+    if (!isTV) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const count = await epg.refreshEpg(true);
+    setToastMessage(
+      count != null && count > 0
+        ? `EPG refreshed: ${count} programs`
+        : epg.error || "EPG refresh finished",
+    );
+    setShowToast(true);
+  };
+
+  const getEpgSubtitle = () => {
+    if (epg.error) return epg.error;
+    if (!epg.effectiveUrl) return "No EPG source detected";
+    if (epg.lastUpdated) {
+      const h = Math.round((Date.now() - epg.lastUpdated) / 3600000);
+      return `${epg.programCount} programs · updated ${h < 1 ? "just now" : `${h}h ago`}`;
+    }
+    return epg.isManualOverride
+      ? "Manual URL set"
+      : "Auto-detected from playlist";
+  };
+
+  const handleRefreshPlaylist = async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await refreshPlaylist();
+    setToastMessage("Playlist refreshed successfully");
+    setShowToast(true);
+  };
+
+  const handleQualitySelect = (value: typeof settings.videoQuality) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ videoQuality: value });
+    setShowQualityModal(false);
+  };
+
+  const handleAutoRefreshSelect = (
+    value: typeof settings.autoRefreshInterval,
+  ) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (value === "custom") {
+      updateSettings({ autoRefreshInterval: "custom" });
+    } else {
+      updateSettings({ autoRefreshInterval: value });
+      setShowAutoRefreshModal(false);
+    }
+  };
+
+  const handleCustomMinutesConfirm = () => {
+    const mins = parseInt(customMinutesText, 10);
+    if (!isNaN(mins) && mins >= 1 && mins <= 10080) {
+      updateSettings({ customRefreshMinutes: mins });
+      setShowAutoRefreshModal(false);
+    }
+  };
+
+  const handleTextSizeSelect = (value: typeof settings.textSize) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ textSize: value });
+    setShowTextSizeModal(false);
+  };
+
+  const handlePlayerEngineSelect = (value: typeof settings.playerEngine) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ playerEngine: value });
+    setShowPlayerEngineModal(false);
+  };
+
+  const getPlayerEngineLabel = () => {
+    const option = PLAYER_ENGINE_OPTIONS.find(
+      (o) => o.value === settings.playerEngine,
+    );
+    return option?.label || "ExoPlayer (Media3)";
+  };
+
+  const getTextSizeLabel = () => {
+    const option = TEXT_SIZE_OPTIONS.find((o) => o.value === settings.textSize);
+    return option?.label || "Medium";
+  };
+
+  const handleThemeSelect = async (value: "light" | "dark" | "pitchblack") => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await setThemeMode(value);
+    setShowThemeModal(false);
+  };
+
+  const handleToggleDynamicColors = (value: boolean) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void setDynamicColors(value);
+  };
+
+  const handleSeedSelect = async (color: string | null) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await setSeedColor(color);
+    setShowSeedModal(false);
+  };
+
+  const handlePlaylistSelect = async (playlistId: string) => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await switchPlaylist(playlistId);
+    setShowPlaylistModal(false);
+  };
+
+  const handleDeletePlaylist = async () => {
+    if (playlistToDelete) {
+      if (!isTV)
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      await deletePlaylist(playlistToDelete);
+      setPlaylistToDelete(null);
+      setShowDeletePlaylistModal(false);
+    }
+  };
+
+  const handleClearAllData = async () => {
+    if (!isTV)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    await clearAllData();
+    setShowClearAllConfirm(false);
+  };
+
+  const handleAddPlaylist = () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    navigation.navigate("Setup", { fromSettings: true });
+  };
+
+  const handleEditPlaylist = (playlistId: string) => {
+    const playlistInfo = playlists.find((p) => p.id === playlistId);
+    if (playlistInfo) {
+      setPlaylistToEdit(playlistId);
+      setEditPlaylistName(playlistInfo.name);
+      setEditPlaylistUrl(playlistInfo.url || "");
+      setShowPlaylistModal(false);
+      setShowEditPlaylistModal(true);
+    }
+  };
+
+  const handleSaveEditPlaylist = async () => {
+    if (playlistToEdit && editPlaylistName.trim()) {
+      try {
+        if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        await updatePlaylistInfo(
+          playlistToEdit,
+          editPlaylistName.trim(),
+          editPlaylistUrl.trim() || undefined,
+        );
+        setShowEditPlaylistModal(false);
+        setPlaylistToEdit(null);
+        setEditPlaylistName("");
+        setEditPlaylistUrl("");
+      } catch (err) {
+        console.error("Failed to update playlist:", err);
+      }
+    }
+  };
+
+  const handleCheckForUpdate = async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCheckingForUpdate(true);
+    setUpdateError(null);
+    try {
+      const info = await checkForUpdate();
+      if (info) {
+        setUpdateInfo(info);
+        if (!info.available) {
+          Alert.alert("Up to Date", "You are already on the latest version.");
+        }
+      } else {
+        setUpdateError("Unable to check for updates");
+      }
+    } catch (error) {
+      setUpdateError("Failed to check for updates");
+    } finally {
+      setCheckingForUpdate(false);
+    }
+  };
+
+  const handleDownloadAndInstall = async () => {
+    if (!updateInfo?.apkUrl) return;
+    if (!isTV)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setDownloadingApk(true);
+    setDownloadProgress(0);
+    setUpdateError(null);
+    try {
+      // Clean up any old APK first
+      await clearDownloadedApk();
+
+      const apkPath = await downloadApk(updateInfo.apkUrl, (progress) => {
+        setDownloadProgress(Math.round(progress * 100));
+      });
+      if (!apkPath) {
+        setUpdateError("Failed to download update");
+        return;
+      }
+      setDownloadingApk(false);
+      setInstallingApk(true);
+
+      const contentUri = await getApkContentUri(apkPath);
+      if (!contentUri) {
+        setUpdateError("Failed to prepare update for installation");
+        return;
+      }
+
+      // Use modern intent action for Android 10+
+      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+        data: contentUri,
+        type: "application/vnd.android.package-archive",
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      });
+
+      // Clean up the APK after successful install launch
+      await clearDownloadedApk();
+    } catch (error) {
+      console.error("Error installing update:", error);
+      setUpdateError("Failed to install update");
+    } finally {
+      setDownloadingApk(false);
+      setInstallingApk(false);
+    }
+  };
+
+  const handleOpenUpdateModal = async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setUpdateError(null);
+    setDownloadProgress(0);
+    // Clean up any old APKs when opening the modal
+    await clearDownloadedApk();
+    setShowUpdateModal(true);
+  };
+
+  const handleCloseUpdateModal = async () => {
+    if (downloadingApk || installingApk) return;
+    setShowUpdateModal(false);
+    // Clean up APK when closing modal
+    await clearDownloadedApk();
+  };
+
+  const getQualityLabel = () => {
+    const option = VIDEO_QUALITY_OPTIONS.find(
+      (o) => o.value === settings.videoQuality,
+    );
+    return option?.label || "Auto";
+  };
+
+  const getAutoRefreshLabel = () => {
+    if (settings.autoRefreshInterval === "custom") {
+      const mins = settings.customRefreshMinutes;
+      if (mins >= 1440 && mins % 1440 === 0)
+        return `Every ${mins / 1440} day${mins / 1440 > 1 ? "s" : ""}`;
+      if (mins >= 60 && mins % 60 === 0)
+        return `Every ${mins / 60} hour${mins / 60 > 1 ? "s" : ""}`;
+      return `Every ${mins} minute${mins > 1 ? "s" : ""}`;
+    }
+    const option = AUTO_REFRESH_OPTIONS.find(
+      (o) => o.value === settings.autoRefreshInterval,
+    );
+    return option?.label || "Off";
+  };
+
+  const getThemeLabel = () => {
+    switch (themeMode) {
+      case "pitchblack":
+        return "Pitch Black";
+      case "light":
+        return "Light";
+      default:
+        return "Dark";
+    }
+  };
+
+  const handleTvModeSelect = (mode: "auto" | "tv" | "standard") => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ tvInterfaceMode: mode });
+    setShowTvModeModal(false);
+  };
+
+  const getTvModeLabel = () => {
+    const option = TV_INTERFACE_OPTIONS.find(
+      (o) => o.value === settings.tvInterfaceMode,
+    );
+    return option?.label || "Auto (TV Devices)";
+  };
+
+  const getActivePlaylistName = () => {
+    const active = playlists.find((p) => p.id === activePlaylistId);
+    return active?.name || "None";
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            // When embedded under the TV top nav the nav has already padded
+            // for the top inset — adding it again doubles the gap.
+            paddingTop: embedded ? Spacing.md : insets.top + Spacing.md,
+            paddingBottom: insets.bottom + Spacing.md,
+            paddingLeft: insets.left + Spacing.md,
+            paddingRight: insets.right + Spacing.md,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View
+          style={
+            useTwoColumns ? styles.twoColumnLayout : styles.singleColumnLayout
+          }
+        >
+          {/* ── Left / only column ─────────────────────────────────── */}
+          <View style={useTwoColumns ? styles.twoColumnItem : styles.fullWidth}>
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              PLAYLISTS
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="list"
+                title="Active Playlist"
+                subtitle={
+                  playlist
+                    ? `${playlist.channels.length} channels`
+                    : "No playlist loaded"
+                }
+                value={getActivePlaylistName()}
+                onPress={() => setShowPlaylistModal(true)}
+                showChevron
+              />
+              {playlists.length > 0 ? (
+                <SettingsRow
+                  icon="albums"
+                  title="Manage Playlists"
+                  subtitle={`${playlists.length} playlist${playlists.length > 1 ? "s" : ""} saved`}
+                  onPress={() => setShowPlaylistModal(true)}
+                  showChevron
+                />
+              ) : null}
+              <SettingsRow
+                icon="add-circle"
+                title="Add Playlist"
+                subtitle="Add M3U URL or file"
+                onPress={handleAddPlaylist}
+                showChevron
+              />
+              <SettingsRow
+                icon="refresh"
+                title="Auto-Refresh"
+                subtitle="Automatically update playlist"
+                value={getAutoRefreshLabel()}
+                onPress={() => setShowAutoRefreshModal(true)}
+                showChevron
+              />
+              <SettingsRow
+                icon="refresh-circle"
+                title="Refresh Playlist Now"
+                subtitle={
+                  playlist ? `Re-fetch ${playlist.name}` : "No playlist loaded"
+                }
+                onPress={handleRefreshPlaylist}
+                disabled={!playlist?.url || isLoadingPlaylist}
+                rightComponent={
+                  isLoadingPlaylist ? (
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  ) : undefined
+                }
+              />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              CHANNELS
+            </ThemedText>
+            <View style={styles.section}>
+              <CategoryVisibility />
+              <ChannelLockSettings />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              PLAYBACK
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="play"
+                title="Auto-play"
+                subtitle="Automatically play when opening a channel"
+                isToggle
+                toggleValue={settings.autoPlay}
+                onToggle={handleToggleAutoPlay}
+              />
+              <SettingsRow
+                icon="musical-notes"
+                title="Background Play"
+                subtitle="Continue audio when app is minimized"
+                isToggle
+                toggleValue={settings.backgroundPlay}
+                onToggle={handleToggleBackgroundPlay}
+              />
+              <SettingsRow
+                icon="options"
+                title="Video Quality"
+                subtitle="Choose preferred video quality"
+                value={getQualityLabel()}
+                onPress={() => setShowQualityModal(true)}
+                showChevron
+              />
+              <SettingsRow
+                icon="settings"
+                title="Player Engine"
+                subtitle="Choose playback engine for streams"
+                value={getPlayerEngineLabel()}
+                onPress={() => setShowPlayerEngineModal(true)}
+                showChevron
+              />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              EPG GUIDE
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="calendar"
+                title="Show EPG Guide"
+                subtitle="Enable program guide (auto-detected from M3U)"
+                isToggle
+                toggleValue={settings.showEpg}
+                onToggle={handleToggleEpg}
+              />
+              {settings.showEpg ? (
+                <>
+                  <SettingsRow
+                    icon="time"
+                    title="Now / Next on cards"
+                    subtitle="Show current program on channel cards"
+                    isToggle
+                    toggleValue={settings.showEpgInCards}
+                    onToggle={handleToggleEpgCards}
+                  />
+                  <SettingsRow
+                    icon="play-circle"
+                    title="Now / Next in player"
+                    subtitle="Show program info while watching"
+                    isToggle
+                    toggleValue={settings.showEpgInPlayer}
+                    onToggle={handleToggleEpgPlayer}
+                  />
+                  <SettingsRow
+                    icon="link"
+                    title="EPG Source"
+                    subtitle={getEpgSubtitle()}
+                    value={epg.isManualOverride ? "Manual" : "Auto"}
+                    onPress={handleOpenEpgUrlModal}
+                    showChevron
+                  />
+                  <SettingsRow
+                    icon="refresh-circle"
+                    title="Refresh EPG Now"
+                    subtitle={
+                      epg.effectiveUrl
+                        ? epg.effectiveUrl.slice(0, 48)
+                        : "No source URL"
+                    }
+                    onPress={handleRefreshEpg}
+                    disabled={!epg.effectiveUrl || epg.isLoading}
+                    rightComponent={
+                      epg.isLoading ? (
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      ) : undefined
+                    }
+                  />
+                </>
+              ) : null}
+            </View>
+          </View>
+
+          {/* ── Right column (or continuation on single column) ─────── */}
+          <View style={useTwoColumns ? styles.twoColumnItem : styles.fullWidth}>
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              APPEARANCE
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon={themeMode === "pitchblack" ? "contrast" : isDark ? "moon" : "sunny"}
+                title="Theme"
+                subtitle="Choose light, dark, or pitch black appearance"
+                value={getThemeLabel()}
+                onPress={() => setShowThemeModal(true)}
+                showChevron
+              />
+              <SettingsRow
+                icon="tv"
+                title="TV Interface"
+                subtitle="3-column layout with preview and top navigation"
+                value={getTvModeLabel()}
+                onPress={() => setShowTvModeModal(true)}
+                showChevron
+              />
+              {dynamicSupported && (
+                <SettingsRow
+                  icon="color-palette-outline"
+                  title="Material You"
+                  subtitle="Match colors to your wallpaper or a custom seed"
+                  isToggle
+                  toggleValue={dynamicColors}
+                  onToggle={handleToggleDynamicColors}
+                />
+              )}
+              {dynamicSupported && dynamicColors && (
+                <SettingsRow
+                  icon="color-fill-outline"
+                  title="Seed Color"
+                  subtitle="Pick a base color for the dynamic theme"
+                  value={seedColor ? seedColor.toUpperCase() : "Wallpaper"}
+                  onPress={() => setShowSeedModal(true)}
+                  showChevron
+                />
+              )}
+              <SettingsRow
+                icon="grid"
+                title="Show Categories"
+                subtitle="Display category filter on channels screen"
+                isToggle
+                toggleValue={settings.showCategoryFilter}
+                onToggle={handleToggleCategories}
+              />
+              <SettingsRow
+                icon="bookmark"
+                title="Remember Category"
+                subtitle="Open last viewed category on app restart"
+                isToggle
+                toggleValue={settings.rememberLastCategory}
+                onToggle={handleToggleRememberCategory}
+              />
+              <SettingsRow
+                icon="text"
+                title="Text Size"
+                subtitle="Adjust channel card text size"
+                value={getTextSizeLabel()}
+                onPress={() => setShowTextSizeModal(true)}
+                showChevron
+              />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              ADVANCED
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="wifi"
+                title="Network Stream"
+                subtitle="Configure DRM, headers, and user agent"
+                onPress={() => navigation.navigate("NetworkStream")}
+                showChevron
+              />
+              <SettingsRow
+                icon="document-text-outline"
+                title="View Logs"
+                subtitle="In-app log viewer for bug reporting"
+                onPress={() => navigation.navigate("Logs")}
+                showChevron
+              />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              STORAGE
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="server"
+                title="Clear All Data"
+                subtitle="Free up storage space"
+                onPress={() => setShowClearAllConfirm(true)}
+                destructive
+              />
+            </View>
+
+            <ThemedText
+              type="small"
+              style={[styles.sectionTitle, { color: theme.textSecondary }]}
+            >
+              ABOUT
+            </ThemedText>
+            <View style={styles.section}>
+              <SettingsRow
+                icon="prism"
+                title="SafeTV"
+                subtitle={`Version ${appVersion}`}
+                value=""
+              />
+              <SettingsRow
+                icon="code-slash"
+                title="Developer"
+                subtitle="dereferencex"
+                value=""
+                onPress={() =>
+                  Linking.openURL("https://github.com/dereferencex")
+                }
+                showChevron
+              />
+              {!isFdroid &&
+                (updateInfo?.available ? (
+                  <SettingsRow
+                    icon="download"
+                    title="Update Available"
+                    subtitle={`Version ${updateInfo.latestVersion} ready to install`}
+                    onPress={handleOpenUpdateModal}
+                    showChevron
+                  />
+                ) : (
+                  <SettingsRow
+                    icon="refresh"
+                    title="Check for Updates"
+                    subtitle={`Current version ${updateInfo?.currentVersion || appVersion}`}
+                    onPress={handleCheckForUpdate}
+                    disabled={checkingForUpdate}
+                    rightComponent={
+                      checkingForUpdate ? (
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      ) : undefined
+                    }
+                  />
+                ))}
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+
+      <Modal
+        visible={showTvModeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTvModeModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowTvModeModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              TV Interface Layout
+            </ThemedText>
+            {TV_INTERFACE_OPTIONS.map((option, idx) => (
+              <FocusableOption
+                key={option.value}
+                onPress={() => handleTvModeSelect(option.value)}
+                isSelected={settings.tvInterfaceMode === option.value}
+                accessibilityLabel={option.label}
+                hasTVPreferredFocus={isTV && idx === 0}
+              >
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="body">{option.label}</ThemedText>
+                  <ThemedText
+                    type="caption"
+                    style={{ color: theme.textSecondary }}
+                  >
+                    {option.desc}
+                  </ThemedText>
+                </View>
+                {settings.tvInterfaceMode === option.value ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </FocusableOption>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showQualityModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowQualityModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowQualityModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Video Quality
+            </ThemedText>
+            {VIDEO_QUALITY_OPTIONS.map((option, idx) => (
+              <FocusableOption
+                key={option.value}
+                onPress={() => handleQualitySelect(option.value)}
+                isSelected={settings.videoQuality === option.value}
+                accessibilityLabel={option.label}
+                hasTVPreferredFocus={isTV && idx === 0}
+              >
+                <ThemedText type="body">{option.label}</ThemedText>
+                {settings.videoQuality === option.value ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </FocusableOption>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showAutoRefreshModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAutoRefreshModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowAutoRefreshModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Auto-Refresh Playlist
+            </ThemedText>
+            {AUTO_REFRESH_OPTIONS.map((option, idx) => (
+              <FocusableOption
+                key={option.value}
+                onPress={() => handleAutoRefreshSelect(option.value)}
+                isSelected={settings.autoRefreshInterval === option.value}
+                accessibilityLabel={option.label}
+                hasTVPreferredFocus={isTV && idx === 0}
+              >
+                <ThemedText type="body">{option.label}</ThemedText>
+                {settings.autoRefreshInterval === option.value ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </FocusableOption>
+            ))}
+            {settings.autoRefreshInterval === "custom" && (
+              <View
+                style={[
+                  styles.customInputRow,
+                  { borderColor: theme.backgroundTertiary },
+                ]}
+              >
+                <TextInput
+                  style={[
+                    styles.customInput,
+                    {
+                      color: theme.text,
+                      borderColor: theme.backgroundTertiary,
+                      backgroundColor: theme.backgroundSecondary,
+                    },
+                  ]}
+                  keyboardType="numeric"
+                  placeholder="Minutes"
+                  placeholderTextColor={theme.textSecondary}
+                  value={customMinutesText}
+                  onChangeText={setCustomMinutesText}
+                  onBlur={handleCustomMinutesConfirm}
+                  autoFocus
+                  selectTextOnFocus
+                />
+                <ThemedText
+                  type="body"
+                  style={{ color: theme.textSecondary, marginLeft: 8 }}
+                >
+                  min
+                </ThemedText>
+                <Pressable
+                  onPress={handleCustomMinutesConfirm}
+                  style={[
+                    styles.customSetButton,
+                    { backgroundColor: theme.primary },
+                  ]}
+                  focusable={!isTV}
+                >
+                  <ThemedText
+                    type="body"
+                    style={{ color: "#fff", fontWeight: "600" }}
+                  >
+                    Set
+                  </ThemedText>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showThemeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowThemeModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowThemeModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Theme
+            </ThemedText>
+            <FocusableOption
+              onPress={() => handleThemeSelect("dark")}
+              isSelected={themeMode === "dark"}
+              accessibilityLabel="Dark theme"
+              hasTVPreferredFocus={isTV}
+            >
+              <View style={styles.themeOption}>
+                <Ionicons name="moon" size={20} color={theme.text} />
+                <ThemedText type="body">Dark</ThemedText>
+              </View>
+              {themeMode === "dark" ? (
+                <Ionicons name="checkmark" size={20} color={theme.primary} />
+              ) : null}
+            </FocusableOption>
+            <FocusableOption
+              onPress={() => handleThemeSelect("light")}
+              isSelected={themeMode === "light"}
+              accessibilityLabel="Light theme"
+            >
+              <View style={styles.themeOption}>
+                <Ionicons name="sunny" size={20} color={theme.text} />
+                <ThemedText type="body">Light</ThemedText>
+              </View>
+              {themeMode === "light" ? (
+                <Ionicons name="checkmark" size={20} color={theme.primary} />
+              ) : null}
+            </FocusableOption>
+            <FocusableOption
+              onPress={() => handleThemeSelect("pitchblack")}
+              isSelected={themeMode === "pitchblack"}
+              accessibilityLabel="Pitch Black theme"
+            >
+              <View style={styles.themeOption}>
+                <Ionicons name="contrast" size={20} color={theme.text} />
+                <ThemedText type="body">Pitch Black</ThemedText>
+              </View>
+              {themeMode === "pitchblack" ? (
+                <Ionicons name="checkmark" size={20} color={theme.primary} />
+              ) : null}
+            </FocusableOption>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showSeedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSeedModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowSeedModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              isTV && styles.modalContentTv,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Seed Color
+            </ThemedText>
+            {isTV ? (
+              /* TV: compact swatch grid — one D-pad row per 4 tiles instead of
+                 a long vertical list. */
+              <View style={styles.seedGrid}>
+                <TVFocusablePressable
+                  onPress={() => handleSeedSelect(null)}
+                  accessibilityLabel="Use wallpaper colors"
+                  hasTVPreferredFocus={isTV}
+                  baseStyle={[
+                    styles.seedTile,
+                    seedColor === null && [
+                      styles.seedTileSelected,
+                      { borderColor: theme.primary },
+                    ],
+                  ]}
+                  focusedStyle={[
+                    styles.seedTileFocused,
+                    { borderColor: theme.primary },
+                  ]}
+                >
+                  <Ionicons
+                    name="color-palette-outline"
+                    size={30}
+                    color={seedColor === null ? theme.primary : theme.text}
+                  />
+                  <ThemedText type="small" style={styles.seedTileLabel}>
+                    Wallpaper
+                  </ThemedText>
+                  {seedColor === null ? (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={18}
+                      color={theme.primary}
+                      style={styles.seedTileCheck}
+                    />
+                  ) : null}
+                </TVFocusablePressable>
+                {SEED_PRESETS.map((preset) => {
+                  const isSelected =
+                    seedColor?.toUpperCase() === preset.value.toUpperCase();
+                  return (
+                    <TVFocusablePressable
+                      key={preset.value}
+                      onPress={() => handleSeedSelect(preset.value)}
+                      accessibilityLabel={`${preset.name} seed color`}
+                      baseStyle={[
+                        styles.seedTile,
+                        isSelected && [
+                          styles.seedTileSelected,
+                          { borderColor: theme.primary },
+                        ],
+                      ]}
+                      focusedStyle={[
+                        styles.seedTileFocused,
+                        { borderColor: theme.primary },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.seedSwatchTv,
+                          { backgroundColor: preset.value },
+                        ]}
+                      />
+                      <ThemedText type="small" style={styles.seedTileLabel}>
+                        {preset.name}
+                      </ThemedText>
+                      {isSelected ? (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={theme.primary}
+                          style={styles.seedTileCheck}
+                        />
+                      ) : null}
+                    </TVFocusablePressable>
+                  );
+                })}
+              </View>
+            ) : (
+              <>
+                <FocusableOption
+                  onPress={() => handleSeedSelect(null)}
+                  isSelected={seedColor === null}
+                  accessibilityLabel="Use wallpaper colors"
+                  hasTVPreferredFocus={isTV}
+                >
+                  <View style={styles.themeOption}>
+                    <Ionicons
+                      name="color-palette-outline"
+                      size={20}
+                      color={theme.text}
+                    />
+                    <ThemedText type="body">Wallpaper (auto)</ThemedText>
+                  </View>
+                  {seedColor === null ? (
+                    <Ionicons name="checkmark" size={20} color={theme.primary} />
+                  ) : null}
+                </FocusableOption>
+                {SEED_PRESETS.map((preset) => (
+                  <FocusableOption
+                    key={preset.value}
+                    onPress={() => handleSeedSelect(preset.value)}
+                    isSelected={
+                      seedColor?.toUpperCase() === preset.value.toUpperCase()
+                    }
+                    accessibilityLabel={`${preset.name} seed color`}
+                  >
+                    <View style={styles.themeOption}>
+                      <View
+                        style={[
+                          styles.seedSwatch,
+                          { backgroundColor: preset.value },
+                        ]}
+                      />
+                      <ThemedText type="body">{preset.name}</ThemedText>
+                    </View>
+                    {seedColor?.toUpperCase() === preset.value.toUpperCase() ? (
+                      <Ionicons name="checkmark" size={20} color={theme.primary} />
+                    ) : null}
+                  </FocusableOption>
+                ))}
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showTextSizeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTextSizeModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowTextSizeModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Text Size
+            </ThemedText>
+            {TEXT_SIZE_OPTIONS.map((option, idx) => (
+              <FocusableOption
+                key={option.value}
+                onPress={() => handleTextSizeSelect(option.value)}
+                isSelected={settings.textSize === option.value}
+                accessibilityLabel={option.label}
+                hasTVPreferredFocus={isTV && idx === 0}
+              >
+                <ThemedText type="body">{option.label}</ThemedText>
+                {settings.textSize === option.value ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </FocusableOption>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showPlayerEngineModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPlayerEngineModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowPlayerEngineModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Player Engine
+            </ThemedText>
+            {PLAYER_ENGINE_OPTIONS.map((option, idx) => (
+              <FocusableOption
+                key={option.value}
+                onPress={() => handlePlayerEngineSelect(option.value)}
+                isSelected={settings.playerEngine === option.value}
+                accessibilityLabel={option.label}
+                hasTVPreferredFocus={isTV && idx === 0}
+              >
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="body">{option.label}</ThemedText>
+                  <ThemedText
+                    type="caption"
+                    style={{ color: theme.textSecondary }}
+                  >
+                    {option.desc}
+                  </ThemedText>
+                </View>
+                {settings.playerEngine === option.value ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </FocusableOption>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showPlaylistModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPlaylistModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowPlaylistModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Playlists
+            </ThemedText>
+            {playlists.length === 0 ? (
+              <ThemedText
+                type="body"
+                style={{
+                  color: theme.textSecondary,
+                  textAlign: "center",
+                  padding: Spacing.md,
+                }}
+              >
+                No playlists saved
+              </ThemedText>
+            ) : (
+              playlists.map((p, idx) => (
+                <View key={p.id} style={styles.playlistGroup}>
+                  {/* Playlist select row */}
+                  <View style={styles.playlistRow}>
+                    <FocusablePressable
+                      onPress={() => handlePlaylistSelect(p.id)}
+                      accessibilityLabel={`Select playlist ${p.name}`}
+                      hasTVPreferredFocus={isTV && idx === 0}
+                      baseStyle={[
+                        styles.playlistItem,
+                        {
+                          backgroundColor:
+                            p.id === activePlaylistId
+                              ? theme.primary + "20"
+                              : "transparent",
+                        },
+                      ]}
+                      focusedStyle={[
+                        styles.modalOptionFocused,
+                        { backgroundColor: theme.primary + "30" },
+                      ]}
+                    >
+                      <View style={styles.playlistInfo}>
+                        <Ionicons
+                          name="list"
+                          size={18}
+                          color={
+                            p.id === activePlaylistId
+                              ? theme.primary
+                              : theme.textSecondary
+                          }
+                        />
+                        <View style={styles.playlistText}>
+                          <ThemedText type="body" numberOfLines={1}>
+                            {p.name}
+                          </ThemedText>
+                          <ThemedText
+                            type="caption"
+                            style={{ color: theme.textSecondary }}
+                          >
+                            {p.channelCount} channels
+                          </ThemedText>
+                        </View>
+                      </View>
+                      {p.id === activePlaylistId ? (
+                        <Ionicons
+                          name="checkmark"
+                          size={20}
+                          color={theme.primary}
+                        />
+                      ) : null}
+                    </FocusablePressable>
+                    {/* On phone: icon buttons inline */}
+                    {!isTV ? (
+                      <>
+                        <FocusablePressable
+                          onPress={() => handleEditPlaylist(p.id)}
+                          hitSlop={8}
+                          accessibilityLabel={`Edit playlist ${p.name}`}
+                          baseStyle={styles.editButton}
+                          focusedStyle={[
+                            styles.editButtonFocused,
+                            { backgroundColor: theme.primary + "20" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="create-outline"
+                            size={18}
+                            color={theme.primary}
+                          />
+                        </FocusablePressable>
+                        <FocusablePressable
+                          onPress={() => {
+                            setPlaylistToDelete(p.id);
+                            setShowPlaylistModal(false);
+                            setShowDeletePlaylistModal(true);
+                          }}
+                          hitSlop={8}
+                          accessibilityLabel={`Delete playlist ${p.name}`}
+                          baseStyle={styles.deleteButton}
+                          focusedStyle={[
+                            styles.deleteButtonFocused,
+                            { backgroundColor: theme.error + "20" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="trash-outline"
+                            size={18}
+                            color={theme.error}
+                          />
+                        </FocusablePressable>
+                      </>
+                    ) : null}
+                  </View>
+                  {/* On TV: full-width Edit / Delete buttons below each row */}
+                  {isTV ? (
+                    <View style={styles.tvPlaylistActions}>
+                      <FocusablePressable
+                        onPress={() => handleEditPlaylist(p.id)}
+                        accessibilityLabel={`Edit playlist ${p.name}`}
+                        baseStyle={styles.tvActionButton}
+                        focusedStyle={[
+                          styles.tvActionButtonFocused,
+                          { backgroundColor: theme.primary + "20" },
+                        ]}
+                      >
+                        <Ionicons
+                          name="create-outline"
+                          size={16}
+                          color={theme.primary}
+                        />
+                        <ThemedText
+                          type="small"
+                          style={{
+                            color: theme.primary,
+                            marginLeft: Spacing.xs,
+                          }}
+                        >
+                          Edit
+                        </ThemedText>
+                      </FocusablePressable>
+                      <FocusablePressable
+                        onPress={() => {
+                          setPlaylistToDelete(p.id);
+                          setShowPlaylistModal(false);
+                          setShowDeletePlaylistModal(true);
+                        }}
+                        accessibilityLabel={`Delete playlist ${p.name}`}
+                        baseStyle={styles.tvActionButton}
+                        focusedStyle={[
+                          styles.tvActionButtonDestructiveFocused,
+                          { backgroundColor: theme.error + "20" },
+                        ]}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={16}
+                          color={theme.error}
+                        />
+                        <ThemedText
+                          type="small"
+                          style={{
+                            color: theme.error,
+                            marginLeft: Spacing.xs,
+                          }}
+                        >
+                          Delete
+                        </ThemedText>
+                      </FocusablePressable>
+                    </View>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showDeletePlaylistModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDeletePlaylistModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowDeletePlaylistModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <View style={styles.confirmIcon}>
+              <Ionicons name="warning" size={32} color={theme.error} />
+            </View>
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Delete Playlist?
+            </ThemedText>
+            <ThemedText
+              type="body"
+              style={[styles.confirmText, { color: theme.textSecondary }]}
+            >
+              This will remove the playlist. Favorites will be preserved.
+            </ThemedText>
+            <View style={styles.confirmButtons}>
+              <Button
+                onPress={() => setShowDeletePlaylistModal(false)}
+                style={[
+                  styles.confirmButton,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                textStyle={{ color: theme.text }}
+                hasTVPreferredFocus={isTV}
+              >
+                Cancel
+              </Button>
+              <Button
+                onPress={handleDeletePlaylist}
+                style={[styles.confirmButton, { backgroundColor: theme.error }]}
+              >
+                Delete
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showClearAllConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowClearAllConfirm(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowClearAllConfirm(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <View style={styles.confirmIcon}>
+              <Ionicons name="warning" size={32} color={theme.error} />
+            </View>
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Clear All Data?
+            </ThemedText>
+            <ThemedText
+              type="body"
+              style={[styles.confirmText, { color: theme.textSecondary }]}
+            >
+              This will remove all app data including playlists, favorites, and
+              settings.
+            </ThemedText>
+            <View style={styles.confirmButtons}>
+              <Button
+                onPress={() => setShowClearAllConfirm(false)}
+                style={[
+                  styles.confirmButton,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                textStyle={{ color: theme.text }}
+                hasTVPreferredFocus={isTV}
+              >
+                Cancel
+              </Button>
+              <Button
+                onPress={handleClearAllData}
+                style={[styles.confirmButton, { backgroundColor: theme.error }]}
+              >
+                Clear All
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showEditPlaylistModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEditPlaylistModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowEditPlaylistModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Edit Playlist
+            </ThemedText>
+            <View style={styles.editInputContainer}>
+              <ThemedText
+                type="small"
+                style={[styles.editInputLabel, { color: theme.textSecondary }]}
+              >
+                Playlist Name
+              </ThemedText>
+              <TextInput
+                value={editPlaylistName}
+                onChangeText={setEditPlaylistName}
+                placeholder="My Playlist"
+                placeholderTextColor={theme.textSecondary}
+                style={[
+                  styles.editInput,
+                  {
+                    color: theme.text,
+                    backgroundColor: theme.backgroundSecondary,
+                    borderColor: theme.backgroundSecondary,
+                  },
+                ]}
+                showSoftInputOnFocus={true}
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
+            </View>
+            <View style={styles.editInputContainer}>
+              <ThemedText
+                type="small"
+                style={[styles.editInputLabel, { color: theme.textSecondary }]}
+              >
+                Playlist URL (optional)
+              </ThemedText>
+              <TextInput
+                value={editPlaylistUrl}
+                onChangeText={setEditPlaylistUrl}
+                placeholder="https://example.com/playlist.m3u"
+                placeholderTextColor={theme.textSecondary}
+                style={[
+                  styles.editInput,
+                  {
+                    color: theme.text,
+                    backgroundColor: theme.backgroundSecondary,
+                    borderColor: theme.backgroundSecondary,
+                  },
+                ]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                showSoftInputOnFocus={true}
+              />
+            </View>
+            <View style={styles.confirmButtons}>
+              <Button
+                onPress={() => setShowEditPlaylistModal(false)}
+                style={[
+                  styles.confirmButton,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                textStyle={{ color: theme.text }}
+                disabled={isLoadingPlaylist}
+                hasTVPreferredFocus={isTV}
+              >
+                Cancel
+              </Button>
+              <Button
+                onPress={handleSaveEditPlaylist}
+                style={styles.confirmButton}
+                disabled={!editPlaylistName.trim() || isLoadingPlaylist}
+              >
+                {isLoadingPlaylist ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showEpgUrlModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEpgUrlModal(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowEpgUrlModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            <ThemedText type="h4" style={styles.modalTitle}>
+              EPG Source URL
+            </ThemedText>
+            {epg.autoDetectedUrls.length > 0 ? (
+              <ThemedText
+                type="small"
+                style={{ color: theme.textSecondary, marginBottom: 8 }}
+                numberOfLines={2}
+              >
+                Auto-detected: {epg.autoDetectedUrls[0].slice(0, 64)}
+              </ThemedText>
+            ) : (
+              <ThemedText
+                type="small"
+                style={{ color: theme.textSecondary, marginBottom: 8 }}
+              >
+                No url-tvg found in this playlist. Paste an XMLTV URL.
+              </ThemedText>
+            )}
+            <View style={styles.editInputContainer}>
+              <ThemedText
+                type="small"
+                style={[styles.editInputLabel, { color: theme.textSecondary }]}
+              >
+                Manual override (empty = use auto)
+              </ThemedText>
+              <TextInput
+                value={epgUrlText}
+                onChangeText={setEpgUrlText}
+                placeholder="https://example.com/epg.xml"
+                placeholderTextColor={theme.textSecondary}
+                style={[
+                  styles.editInput,
+                  {
+                    color: theme.text,
+                    backgroundColor: theme.backgroundSecondary,
+                    borderColor: theme.backgroundSecondary,
+                  },
+                ]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                showSoftInputOnFocus={true}
+              />
+            </View>
+            <View style={styles.confirmButtons}>
+              <Button
+                onPress={() => setShowEpgUrlModal(false)}
+                style={[
+                  styles.confirmButton,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                textStyle={{ color: theme.text }}
+                hasTVPreferredFocus={isTV}
+              >
+                Cancel
+              </Button>
+              <Button onPress={handleSaveEpgUrl} style={styles.confirmButton}>
+                Save
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showUpdateModal && !isFdroid}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseUpdateModal}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={handleCloseUpdateModal}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <View style={styles.confirmIcon}>
+              <Ionicons name="cloud-download" size={32} color={theme.primary} />
+            </View>
+            <ThemedText type="h4" style={styles.modalTitle}>
+              Update to v{updateInfo?.latestVersion}
+            </ThemedText>
+            {updateInfo?.releaseNotes && (
+              <ScrollView
+                style={[
+                  styles.releaseNotesContainer,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                contentContainerStyle={styles.releaseNotesContent}
+              >
+                <ThemedText
+                  type="small"
+                  style={[styles.releaseNotesText, { color: theme.text }]}
+                >
+                  {updateInfo.releaseNotes}
+                </ThemedText>
+              </ScrollView>
+            )}
+            {updateError && (
+              <ThemedText
+                type="small"
+                style={[styles.errorText, { color: theme.error }]}
+              >
+                {updateError}
+              </ThemedText>
+            )}
+            {downloadingApk && (
+              <View style={styles.progressContainer}>
+                <View
+                  style={[
+                    styles.progressBar,
+                    { backgroundColor: theme.backgroundSecondary },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${downloadProgress}%`,
+                        backgroundColor: theme.primary,
+                      },
+                    ]}
+                  />
+                </View>
+                <ThemedText
+                  type="small"
+                  style={[styles.progressText, { color: theme.textSecondary }]}
+                >
+                  Downloading... {downloadProgress}%
+                </ThemedText>
+              </View>
+            )}
+            {installingApk && (
+              <View style={styles.progressContainer}>
+                <ActivityIndicator size="large" color={theme.primary} />
+                <ThemedText
+                  type="small"
+                  style={[styles.progressText, { color: theme.textSecondary }]}
+                >
+                  Installing update...
+                </ThemedText>
+              </View>
+            )}
+            <View style={styles.confirmButtons}>
+              <Button
+                onPress={handleCloseUpdateModal}
+                style={[
+                  styles.confirmButton,
+                  { backgroundColor: theme.backgroundSecondary },
+                ]}
+                textStyle={{ color: theme.text }}
+                disabled={downloadingApk || installingApk}
+                hasTVPreferredFocus={isTV}
+              >
+                Later
+              </Button>
+              <Button
+                onPress={handleDownloadAndInstall}
+                style={styles.confirmButton}
+                disabled={downloadingApk || installingApk}
+              >
+                {downloadingApk ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : installingApk ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  "Install"
+                )}
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Toast
+        message={toastMessage || ""}
+        visible={showToast}
+        onHide={() => setShowToast(false)}
+      />
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  content: {},
+  columns: {
+    flexDirection: "row",
+    gap: Spacing["2xl"],
+    flexWrap: "wrap",
+  },
+  columnsSingle: {
+    flexDirection: "column",
+    gap: 0,
+    width: "100%",
+  },
+  column: {
+    width: "100%",
+  },
+  columnWide: {
+    flex: 1,
+    maxWidth: 450,
+    width: "auto",
+  },
+  twoColumnLayout: {
+    flexDirection: "row",
+    gap: Spacing["2xl"],
+    alignItems: "flex-start",
+  },
+  singleColumnLayout: {
+    flexDirection: "column",
+  },
+  twoColumnItem: {
+    flex: 1,
+  },
+  fullWidth: {
+    width: "100%",
+  },
+  sectionTitle: {
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
+    marginLeft: Spacing.sm,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    fontSize: 11,
+  },
+  section: {},
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Spacing["2xl"],
+  },
+  modalContent: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.xl,
+  },
+  modalTitle: {
+    textAlign: "center",
+    marginBottom: Spacing.md,
+  },
+  modalOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: Spacing.md,
+    borderRadius: BorderRadius.sm,
+    marginBottom: Spacing.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  modalOptionFocused: {
+    transform: [{ scale: 1.03 }],
+  },
+  themeOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  seedSwatch: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  modalContentTv: {
+    maxWidth: 520,
+    padding: Spacing["2xl"],
+  },
+  seedGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: Spacing.md,
+  },
+  seedTile: {
+    width: 110,
+    paddingVertical: Spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  seedTileSelected: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  seedTileFocused: {
+    transform: [{ scale: 1.05 }],
+  },
+  seedTileLabel: {
+    fontWeight: "600",
+  },
+  seedTileCheck: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+  },
+  seedSwatchTv: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  playlistGroup: {
+    marginBottom: Spacing.xs,
+  },
+  playlistRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  tvPlaylistActions: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    marginTop: 2,
+    marginBottom: Spacing.sm,
+  },
+  tvActionButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  tvActionButtonFocused: {
+    transform: [{ scale: 1.03 }],
+  },
+  tvActionButtonDestructiveFocused: {
+    transform: [{ scale: 1.03 }],
+  },
+  playlistItem: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: Spacing.md,
+    borderRadius: BorderRadius.sm,
+    marginBottom: Spacing.xs,
+  },
+  playlistInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    flex: 1,
+  },
+  playlistText: {
+    flex: 1,
+  },
+  deleteButton: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  deleteButtonFocused: {},
+  editButton: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  editButtonFocused: {},
+  editInputContainer: {
+    marginBottom: Spacing.md,
+  },
+  editInputLabel: {
+    marginBottom: Spacing.xs,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  editInput: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 1,
+    fontSize: 14,
+  },
+  confirmIcon: {
+    alignSelf: "center",
+    marginBottom: Spacing.md,
+  },
+  confirmText: {
+    textAlign: "center",
+    marginBottom: Spacing.xl,
+  },
+  confirmButtons: {
+    flexDirection: "row",
+    gap: Spacing.md,
+  },
+  confirmButton: {
+    flex: 1,
+  },
+  releaseNotesContainer: {
+    maxHeight: 150,
+    borderRadius: BorderRadius.sm,
+    padding: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  releaseNotesContent: {
+    paddingVertical: Spacing.xs,
+  },
+  releaseNotesText: {
+    lineHeight: 18,
+  },
+  errorText: {
+    textAlign: "center",
+    marginBottom: Spacing.md,
+    fontSize: 13,
+  },
+  progressContainer: {
+    alignItems: "center",
+    marginBottom: Spacing.md,
+  },
+  progressBar: {
+    width: "100%",
+    height: 6,
+    borderRadius: 3,
+    overflow: "hidden",
+    marginBottom: Spacing.xs,
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  progressText: {
+    fontSize: 12,
+  },
+  customInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderWidth: 1,
+    borderRadius: BorderRadius.sm,
+  },
+  customInput: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: Spacing.md,
+    fontSize: 16,
+    textAlign: "center",
+  },
+  customSetButton: {
+    marginLeft: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderRadius: BorderRadius.sm,
+  },
+});

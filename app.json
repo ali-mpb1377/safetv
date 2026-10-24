@@ -1,0 +1,97 @@
+{
+  "expo": {
+    "name": "SafeTV",
+    "slug": "prysm",
+    "version": "1.5.0",
+    "orientation": "default",
+    "icon": "./assets/images/icon.png",
+    "scheme": "prysmplayer",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "jsEngine": "hermes",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.prysmplayer.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0E1A",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.prysmplayer.app",
+      "versionCode": 10500,
+      "jsEngine": "hermes",
+      "permissions": [
+        "REQUEST_INSTALL_PACKAGES"
+      ]
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "@react-native-tvos/config-tv",
+        {
+          "isTV": true,
+          "androidTVBanner": "./assets/images/android-tv-banner.png"
+        }
+      ],
+      [
+        "./plugins/withNetworkSecurityConfig",
+        {}
+      ],
+      [
+        "./modules/tv-channel/plugin"
+      ],
+      [
+        "./modules/tv-player/plugin"
+      ],
+      [
+        "./modules/crash-handler/plugin"
+      ],
+      [
+        "./modules/logcat-reader/plugin"
+      ],
+      [
+        "./modules/dynamic-color/plugin"
+      ],
+      [
+        "./plugins/withAbiSplits",
+        {}
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 250,
+          "resizeMode": "contain",
+          "backgroundColor": "#0B0E1A",
+          "dark": {
+            "backgroundColor": "#0B0E1A"
+          }
+        }
+      ],
+      "expo-web-browser",
+      [
+        "expo-screen-orientation",
+        {
+          "initialOrientation": "DEFAULT"
+        }
+      ],
+      "expo-font"
+    ],
+    "experiments": {
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0f6c48a8-8b6b-4cbd-8839-cb7ac433c62f"
+      }
+    },
+    "owner": "pavan82k"
+  }
+}

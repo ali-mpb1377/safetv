@@ -1,0 +1,1015 @@
+import React, {
+  useState,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
+import {
+  StyleSheet,
+  View,
+  Pressable,
+  ActivityIndicator,
+  ScrollView,
+  Modal,
+  Platform,
+  ViewStyle,
+  useWindowDimensions,
+} from "react-native";
+
+const isTV = Platform.isTV;
+import { FlashList } from "@shopify/flash-list";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
+
+import { ThemedView } from "@/components/ThemedView";
+import { ThemedText } from "@/components/ThemedText";
+import { SearchBar } from "@/components/SearchBar";
+import { ChannelCardHorizontal } from "@/components/ChannelCardHorizontal";
+import { EpgGuideView } from "@/components/EpgGuideView";
+import { EmptyState } from "@/components/EmptyState";
+import { MiniPreviewPlayer } from "@/components/MiniPreviewPlayer";
+import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
+import { TVFocusablePressable } from "@/components/TVFocusablePressable";
+import { usePlaylist } from "@/context/PlaylistContext";
+import { useEpg } from "@/context/EpgContext";
+import { useThemeContext } from "@/context/ThemeContext";
+import { useResponsive } from "@/hooks/useResponsive";
+import { useOrientation } from "@/hooks/useOrientation";
+import { Spacing, BorderRadius } from "@/constants/theme";
+import { Channel } from "@/types/playlist";
+import { RootStackParamList } from "@/navigation/RootStackNavigator";
+
+const emptyChannelsImage = require("../../assets/images/empty-channels.png");
+
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
+function FocusableCategoryItem({
+  cat,
+  isSelected,
+  isFav,
+  count,
+  onPress,
+  onFavoritePress,
+  theme,
+}: {
+  cat: string;
+  isSelected: boolean;
+  isFav: boolean;
+  count: number;
+  onPress: () => void;
+  onFavoritePress: (cat: string, e: any) => void;
+  theme: any;
+}) {
+  const [isFocused, setIsFocused] = useState(false);
+  const [isFavFocused, setIsFavFocused] = useState(false);
+
+  return (
+    <TVFocusablePressable
+      onPress={onPress}
+      // On TV: long-press the category item to toggle favourite (since the
+      // star button is not separately focusable on TV)
+      onLongPress={
+        isTV && cat !== "All" ? () => onFavoritePress(cat, {}) : undefined
+      }
+      delayLongPress={500}
+      onFocusChange={setIsFocused}
+      testID={`category-${cat}`}
+      baseStyle={[
+        styles.categoryItem,
+        {
+          backgroundColor: isSelected ? theme.primary + "20" : "transparent",
+        },
+      ]}
+      focusedStyle={{ backgroundColor: theme.primary + "30" }}
+    >
+      <View style={styles.categoryItemLeft}>
+        {isFav ? (
+          <Ionicons
+            name="star"
+            size={16}
+            color={theme.primary}
+            style={styles.categoryStarIcon}
+          />
+        ) : null}
+        <ThemedText
+          type="body"
+          numberOfLines={1}
+          style={[
+            styles.categoryItemText,
+            isSelected && { color: theme.primary, fontWeight: "600" },
+            isFocused && { color: theme.text },
+          ]}
+        >
+          {cat}
+        </ThemedText>
+      </View>
+      <View style={styles.categoryItemRight}>
+        <ThemedText
+          type="small"
+          style={{
+            color: isFocused ? theme.primary : theme.textSecondary,
+          }}
+        >
+          {count}
+        </ThemedText>
+        {cat !== "All" ? (
+          <Pressable
+            onPress={(e) => onFavoritePress(cat, e)}
+            onFocus={() => setIsFavFocused(true)}
+            onBlur={() => setIsFavFocused(false)}
+            style={
+              [
+                styles.categoryFavButton,
+                isFavFocused && [
+                  styles.categoryFavButtonFocused,
+                  { backgroundColor: theme.primary + "20" },
+                ],
+              ] as ViewStyle[]
+            }
+            hitSlop={8}
+            // Not focusable on TV — favourite via long-press on the row instead
+            focusable={!isTV}
+            accessibilityLabel={
+              isFav ? `Remove ${cat} from favorites` : `Add ${cat} to favorites`
+            }
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name={isFav ? "star" : "star-outline"}
+              size={18}
+              color={isFav ? theme.primary : theme.textSecondary}
+            />
+          </Pressable>
+        ) : null}
+      </View>
+    </TVFocusablePressable>
+  );
+}
+
+function FocusableMenuButton({
+  onPress,
+  theme,
+}: {
+  onPress: () => void;
+  theme: any;
+}) {
+  return (
+    <TVFocusablePressable
+      onPress={onPress}
+      accessibilityLabel="Open categories"
+      testID="menu-button"
+      baseStyle={[
+        styles.menuButton,
+        { backgroundColor: theme.backgroundSecondary },
+      ]}
+      focusedStyle={{ backgroundColor: theme.primary + "30" }}
+    >
+      <Ionicons name="menu" size={22} color={theme.text} />
+    </TVFocusablePressable>
+  );
+}
+
+function FocusableCloseButton({
+  onPress,
+  theme,
+  hasTVPreferredFocus,
+}: {
+  onPress: () => void;
+  theme: any;
+  hasTVPreferredFocus?: boolean;
+}) {
+  return (
+    <TVFocusablePressable
+      onPress={onPress}
+      accessibilityLabel="Close categories"
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      baseStyle={styles.closeButton}
+      focusedStyle={[
+        styles.closeButtonFocused,
+        { backgroundColor: theme.primary + "20" },
+      ]}
+    >
+      <Ionicons name="close" size={24} color={theme.text} />
+    </TVFocusablePressable>
+  );
+}
+
+const DRAWER_WIDTH = 280;
+const DOUBLE_PRESS_DELAY = 300;
+// Extra rows pre-rendered beyond the visible viewport on TV for smooth D-pad scrolling
+const TV_DRAW_DISTANCE = 1200;
+const MOBILE_DRAW_DISTANCE = 300;
+
+const ItemSeparator = () => <View style={{ height: Spacing.sm }} />;
+const keyExtractor = (item: Channel) => item.id;
+
+/** Estimated total card height: logo area + info section + separator */
+function getEstimatedCardHeight(
+  cardWidth: number,
+  isUltraWide: boolean,
+): number {
+  const logoHeight = isUltraWide ? cardWidth * 0.5 : cardWidth * 0.55;
+  const infoHeight = 56; // name (2 lines ~28px) + live row (~12px) + padding (~16px)
+  return Math.ceil(logoHeight + infoHeight + Spacing.sm); // Spacing.sm = separator
+}
+
+interface ChannelsScreenProps {
+  /** Category to preselect when opened from a home tile. */
+  presetCategory?: string | null;
+  /** Open directly in the guide (EPG) view. */
+  presetGuide?: boolean;
+  /** Changes every time a home tile is tapped so the preset re-applies. */
+  presetNonce?: number;
+}
+
+export default function ChannelsScreen({
+  presetCategory,
+  presetGuide,
+  presetNonce = 0,
+}: ChannelsScreenProps = {}) {
+  const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NavigationProp>();
+  const { isUltraWide, gridColumns, cardWidth } = useResponsive();
+  const { isPortrait } = useOrientation();
+  const { theme } = useThemeContext();
+
+  const {
+    playlist,
+    favorites,
+    favoriteCategories,
+    isLoading,
+    toggleFavorite,
+    toggleFavoriteCategory,
+    isCategoryFavorite,
+    searchChannels,
+    getChannelById,
+    settings,
+    updateSettings,
+  } = usePlaylist();
+
+  // Two-pane layout: channel list on the left, small live preview on the
+  // right (landscape / tablet). On narrow portrait screens the preview sits
+  // above the list instead.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const sideBySide = winWidth > winHeight && winWidth >= 600;
+  const { previewChannel, onChannelPress, openPreviewFullscreen } =
+    useChannelPressFlow();
+  const onChannelPressRef = useRef(onChannelPress);
+  onChannelPressRef.current = onChannelPress;
+  const listPaneWidth = sideBySide
+    ? Math.floor((winWidth - insets.left - insets.right) * 0.62)
+    : winWidth - insets.left - insets.right;
+  const listColumns = sideBySide
+    ? Math.max(1, Math.floor(listPaneWidth / (cardWidth + Spacing.xs * 2)))
+    : gridColumns;
+
+  const [searchQuery, setSearchQuery] = useState("");
+  // Debounced query — filteredChannels recomputes only after 200ms of no typing
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Category picked by the user this session; null = derive from settings.
+  const [userCategory, setUserCategory] = useState<string | null>(null);
+  const lastPlaylistIdRef = useRef<string | null | undefined>(playlist?.id);
+
+  // The screen stays mounted while the user switches playlists from the
+  // Settings tab, so drop the previous playlist's selection the moment the
+  // active playlist changes — its categories must never leak across.
+  if (lastPlaylistIdRef.current !== playlist?.id) {
+    lastPlaylistIdRef.current = playlist?.id;
+    setUserCategory(null);
+  }
+
+  // Remembered category for THIS playlist only; falls back to "All" when
+  // remembering is off or the stored category no longer exists here.
+  const rememberedCategory =
+    settings.rememberLastCategory && playlist
+      ? settings.lastCategoryByPlaylist[playlist.id]
+      : undefined;
+  const selectedCategory =
+    userCategory ??
+    (rememberedCategory && playlist?.categories.includes(rememberedCategory)
+      ? rememberedCategory
+      : "All");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [guideView, setGuideView] = useState(false);
+  const epg = useEpg();
+  const epgEnabled = settings.showEpg && Boolean(epg.effectiveUrl);
+
+  // Apply the preset coming from the home tiles (Movies / Series / Guide).
+  useEffect(() => {
+    if (presetNonce === 0) return;
+    setUserCategory(presetCategory ?? "All");
+    setGuideView(Boolean(presetGuide) && epgEnabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetNonce]);
+  const epgBadgesEnabled = epgEnabled && settings.showEpgInCards;
+
+  const drawerTranslate = useSharedValue(-DRAWER_WIDTH);
+  const backdropOpacity = useSharedValue(0);
+  const lastLeftPressTime = useRef<number>(0);
+
+  const categories = useMemo(() => {
+    if (!playlist) return ["All"];
+    const sortedCategories = [...playlist.categories].sort((a, b) => {
+      const aIsFav = favoriteCategories.includes(a);
+      const bIsFav = favoriteCategories.includes(b);
+      if (aIsFav && !bIsFav) return -1;
+      if (!aIsFav && bIsFav) return 1;
+      return 0;
+    });
+    return ["All", ...sortedCategories];
+  }, [playlist, favoriteCategories]);
+
+  const categoryChannelCounts = useMemo(() => {
+    if (!playlist) return {};
+    const counts: Record<string, number> = {
+      All: playlist.channels.length,
+    };
+    for (const ch of playlist.channels) {
+      if (ch.group) {
+        counts[ch.group] = (counts[ch.group] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [playlist]);
+
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 200);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchQuery]);
+
+  const filteredChannels = useMemo(() => {
+    if (!playlist) return [];
+
+    if (debouncedSearchQuery.trim()) {
+      return searchChannels(debouncedSearchQuery);
+    }
+
+    if (selectedCategory !== "All") {
+      return playlist.channels.filter((ch) => ch.group === selectedCategory);
+    }
+
+    return playlist.channels;
+  }, [playlist, debouncedSearchQuery, selectedCategory, searchChannels]);
+
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    drawerTranslate.value = withTiming(0, { duration: 250 });
+    backdropOpacity.value = withTiming(0.5, { duration: 250 });
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
+  const closeDrawer = useCallback(() => {
+    drawerTranslate.value = withTiming(-DRAWER_WIDTH, { duration: 200 });
+    backdropOpacity.value = withTiming(0, { duration: 200 });
+    setTimeout(() => setDrawerOpen(false), 200);
+  }, []);
+
+  const handleLeftPress = useCallback(() => {
+    const now = Date.now();
+    if (now - lastLeftPressTime.current < DOUBLE_PRESS_DELAY) {
+      openDrawer();
+      lastLeftPressTime.current = 0;
+    } else {
+      lastLeftPressTime.current = now;
+    }
+  }, [openDrawer]);
+
+  useEffect(() => {
+    if (!isTV) return;
+
+    // react-native-tvos uses an object-based TVEventHandler API that is NOT
+    // exported from the main react-native index — import it from the library
+    // path directly. The old `new TVHandler().enable(...)` constructor API no
+    // longer exists, which silently broke this double-press shortcut.
+    let TVEventHandler: any;
+    try {
+      TVEventHandler =
+        require("react-native/Libraries/Components/TV/TVEventHandler").default;
+    } catch (_) {
+      return;
+    }
+    if (!TVEventHandler?.addListener) return;
+
+    const subscription = TVEventHandler.addListener((evt: any) => {
+      if (evt?.eventType === "left") handleLeftPress();
+    });
+
+    return () => {
+      try {
+        subscription?.remove();
+      } catch (_) {}
+    };
+  }, [handleLeftPress]);
+
+  const handleCategoryChange = useCallback(
+    (category: string) => {
+      setUserCategory(category);
+      setSearchQuery("");
+      closeDrawer();
+      if (settings.rememberLastCategory && playlist) {
+        updateSettings({
+          lastCategoryByPlaylist: {
+            ...settings.lastCategoryByPlaylist,
+            [playlist.id]: category,
+          },
+        });
+      }
+    },
+    [
+      closeDrawer,
+      playlist,
+      settings.lastCategoryByPlaylist,
+      settings.rememberLastCategory,
+      updateSettings,
+    ],
+  );
+
+  const handleSearchChange = useCallback((query: string) => {
+    setSearchQuery(query);
+  }, []);
+
+  const handleCategoryFavoritePress = useCallback(
+    async (category: string, e: any) => {
+      // stopPropagation is only available on real touch events (phone).
+      // On TV long-press we pass an empty object so guard before calling.
+      if (e?.stopPropagation) e.stopPropagation();
+      await toggleFavoriteCategory(category);
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    },
+    [toggleFavoriteCategory],
+  );
+
+  const animatedDrawerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: drawerTranslate.value }],
+  }));
+
+  const animatedBackdropStyle = useAnimatedStyle(() => ({
+    opacity: backdropOpacity.value,
+  }));
+
+  const favoritesSet = useMemo(() => new Set(favorites), [favorites]);
+
+  const channelPressHandlers = useRef(new Map<string, () => void>()).current;
+  const favoritePressHandlers = useRef(new Map<string, () => void>()).current;
+  const longPressHandlers = useRef(new Map<string, () => void>()).current;
+
+  const getChannelPressHandler = useCallback(
+    (channelId: string) => {
+      let handler = channelPressHandlers.get(channelId);
+      if (!handler) {
+        handler = () => {
+          const ch = getChannelById(channelId);
+          if (ch) onChannelPressRef.current(ch);
+        };
+        channelPressHandlers.set(channelId, handler);
+      }
+      return handler;
+    },
+    [getChannelById, channelPressHandlers],
+  );
+
+  const getFavoritePressHandler = useCallback(
+    (channelId: string) => {
+      let handler = favoritePressHandlers.get(channelId);
+      if (!handler) {
+        handler = () => toggleFavorite(channelId);
+        favoritePressHandlers.set(channelId, handler);
+      }
+      return handler;
+    },
+    [toggleFavorite, favoritePressHandlers],
+  );
+
+  const getLongPressHandler = useCallback(
+    (channelId: string) => {
+      let handler = longPressHandlers.get(channelId);
+      if (!handler) {
+        handler = () => {
+          toggleFavorite(channelId);
+          if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        };
+        longPressHandlers.set(channelId, handler);
+      }
+      return handler;
+    },
+    [toggleFavorite, longPressHandlers],
+  );
+
+  const renderChannel = useCallback(
+    ({ item: channel }: { item: Channel }) => (
+      <ChannelCardHorizontal
+        channel={channel}
+        isFavorite={favoritesSet.has(channel.id)}
+        onPress={getChannelPressHandler(channel.id)}
+        onFavoritePress={getFavoritePressHandler(channel.id)}
+        onLongPress={getLongPressHandler(channel.id)}
+        cardWidth={cardWidth}
+        isUltraWide={isUltraWide}
+        textSize={settings.textSize}
+        themeBackground={theme.backgroundDefault}
+        themeTextSecondary={theme.textSecondary}
+        epgNowNext={epgBadgesEnabled ? epg.getNowNext(channel.id) : undefined}
+        showEpg={epgBadgesEnabled}
+      />
+    ),
+    [
+      favoritesSet,
+      getChannelPressHandler,
+      getFavoritePressHandler,
+      getLongPressHandler,
+      cardWidth,
+      isUltraWide,
+      settings.textSize,
+      theme.backgroundDefault,
+      theme.textSecondary,
+      epgBadgesEnabled,
+      epg,
+    ],
+  );
+
+  const ListHeader = useMemo(() => {
+    const currentCategory =
+      selectedCategory !== "All"
+        ? selectedCategory
+        : searchQuery.trim()
+          ? "Search Results"
+          : "All Channels";
+    const isCatFavorite =
+      selectedCategory !== "All" && isCategoryFavorite(selectedCategory);
+
+    return (
+      <View style={styles.listHeader}>
+        <View style={styles.categoryHeader}>
+          <View style={styles.categoryTitleRow}>
+            {isCatFavorite ? (
+              <View style={styles.favoriteCategoryIcon}>
+                <ThemedText type="caption" style={{ color: theme.primary }}>
+                  ★
+                </ThemedText>
+              </View>
+            ) : null}
+            <ThemedText
+              type="h4"
+              style={[
+                styles.categoryTitle,
+                isUltraWide && styles.categoryTitleCompact,
+              ]}
+            >
+              {currentCategory}
+            </ThemedText>
+          </View>
+          <ThemedText
+            type="small"
+            style={[styles.categoryCount, { color: theme.textSecondary }]}
+          >
+            {filteredChannels.length} channels
+          </ThemedText>
+        </View>
+      </View>
+    );
+  }, [
+    selectedCategory,
+    searchQuery,
+    isCategoryFavorite,
+    isUltraWide,
+    filteredChannels.length,
+    theme,
+  ]);
+
+  const ListEmpty = useMemo(
+    () => (
+      <View style={styles.emptyContainer}>
+        <EmptyState
+          image={emptyChannelsImage}
+          title="No Results"
+          description={
+            searchQuery
+              ? `No channels found for "${searchQuery}"`
+              : "No channels in this category"
+          }
+          actionLabel={searchQuery ? "Clear Search" : undefined}
+          onAction={searchQuery ? () => handleSearchChange("") : undefined}
+        />
+      </View>
+    ),
+    [searchQuery, handleSearchChange],
+  );
+
+  if (isLoading) {
+    return (
+      <ThemedView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+        </View>
+      </ThemedView>
+    );
+  }
+
+  if (!playlist || playlist.channels.length === 0) {
+    return (
+      <ThemedView style={styles.container}>
+        <View style={styles.emptyContainer}>
+          <EmptyState
+            image={emptyChannelsImage}
+            title="No Playlist Loaded"
+            description="Go to Settings to add your M3U playlist"
+          />
+        </View>
+      </ThemedView>
+    );
+  }
+
+  return (
+    <ThemedView style={styles.container}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: isPortrait ? insets.top + Spacing.sm : Spacing.sm,
+            paddingLeft: insets.left + Spacing.md,
+            paddingRight: insets.right + Spacing.md,
+            borderBottomColor: theme.backgroundSecondary,
+          },
+        ]}
+      >
+        <View style={styles.headerRow}>
+          <FocusableMenuButton onPress={openDrawer} theme={theme} />
+          <View
+            style={[
+              styles.searchContainer,
+              isUltraWide && styles.searchContainerCompact,
+            ]}
+          >
+            <SearchBar
+              value={searchQuery}
+              onChangeText={handleSearchChange}
+              placeholder="Search channels..."
+            />
+          </View>
+          {epgEnabled ? (
+            <TVFocusablePressable
+              onPress={() => setGuideView((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                guideView ? "Show grid view" : "Show guide view"
+              }
+              baseStyle={[
+                styles.guideToggle,
+                {
+                  backgroundColor: guideView
+                    ? theme.primary + "30"
+                    : theme.backgroundSecondary,
+                },
+              ]}
+              focusedStyle={{ backgroundColor: theme.primary + "40" }}
+            >
+              <Ionicons
+                name={guideView ? "grid" : "calendar"}
+                size={20}
+                color={guideView ? theme.primary : theme.text}
+              />
+            </TVFocusablePressable>
+          ) : null}
+        </View>
+        <View style={styles.selectedCategoryRow}>
+          <ThemedText
+            type="body"
+            numberOfLines={1}
+            style={[styles.selectedCategoryText, { fontWeight: "600" }]}
+          >
+            {selectedCategory}
+          </ThemedText>
+          <ThemedText type="small" style={{ color: theme.textSecondary }}>
+            {categoryChannelCounts[selectedCategory] || 0} channels
+          </ThemedText>
+        </View>
+      </View>
+
+      <View style={sideBySide ? styles.splitRow : styles.splitColumn}>
+        {!(epgEnabled && guideView) ? (
+          <View
+            style={[
+              sideBySide ? styles.previewPaneSide : styles.previewPaneTop,
+              {
+                paddingLeft: sideBySide ? Spacing.sm : insets.left + Spacing.md,
+                paddingRight: insets.right + Spacing.md,
+              },
+            ]}
+          >
+            <MiniPreviewPlayer
+              channel={previewChannel}
+              onPress={openPreviewFullscreen}
+              hint="Tap a channel to preview, tap again for fullscreen"
+            />
+            {previewChannel ? (
+              <View style={styles.previewInfo}>
+                <ThemedText type="body" numberOfLines={1} style={{ fontWeight: "600" }}>
+                  {previewChannel.name}
+                </ThemedText>
+                <ThemedText
+                  type="small"
+                  numberOfLines={1}
+                  style={{ color: theme.textSecondary }}
+                >
+                  {epgEnabled
+                    ? (epg.getNowNext(previewChannel.id)?.now?.title ??
+                      previewChannel.group)
+                    : previewChannel.group}
+                </ThemedText>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+      <View style={[styles.listContainer, sideBySide && !(epgEnabled && guideView) ? { flex: 0, width: listPaneWidth } : null]}>
+        {epgEnabled && guideView ? (
+          <EpgGuideView
+            channels={filteredChannels}
+            getProgramsForChannel={epg.getProgramsForChannel}
+            onSelectChannel={(id) =>
+              navigation.navigate("Player", { channelId: id })
+            }
+          />
+        ) : (
+          <FlashList<Channel>
+            key={`grid-${listColumns}`}
+            data={filteredChannels}
+            renderItem={renderChannel}
+            keyExtractor={keyExtractor}
+            numColumns={listColumns}
+            ListHeaderComponent={ListHeader}
+            ListHeaderComponentStyle={styles.listHeaderWrapper}
+            ListEmptyComponent={ListEmpty}
+            drawDistance={isTV ? TV_DRAW_DISTANCE : MOBILE_DRAW_DISTANCE}
+            maxItemsInRecyclePool={isTV ? listColumns * 12 : listColumns * 8}
+            contentContainerStyle={{
+              paddingBottom: insets.bottom + Spacing.md,
+              paddingHorizontal: Spacing.xs,
+            }}
+            ItemSeparatorComponent={ItemSeparator}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
+      </View>
+
+      <Modal
+        visible={drawerOpen}
+        transparent
+        animationType="none"
+        onRequestClose={closeDrawer}
+        statusBarTranslucent
+      >
+        <View style={styles.drawerOverlay}>
+          <Animated.View style={[styles.backdrop, animatedBackdropStyle]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeDrawer} />
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.drawer,
+              {
+                backgroundColor: theme.backgroundDefault,
+                paddingTop: insets.top + Spacing.md,
+                paddingBottom: insets.bottom + Spacing.md,
+              },
+              animatedDrawerStyle,
+            ]}
+          >
+            <View style={styles.drawerHeader}>
+              <ThemedText type="h4">Categories</ThemedText>
+              <FocusableCloseButton
+                onPress={closeDrawer}
+                theme={theme}
+                hasTVPreferredFocus={isTV}
+              />
+            </View>
+
+            <FlashList
+              data={categories}
+              renderItem={({ item: cat, index }) => {
+                const isSelected = selectedCategory === cat;
+                const isFav = isCategoryFavorite(cat);
+                const count = categoryChannelCounts[cat] || 0;
+
+                return (
+                  <FocusableCategoryItem
+                    cat={cat}
+                    isSelected={isSelected}
+                    isFav={isFav}
+                    count={count}
+                    onPress={() => handleCategoryChange(cat)}
+                    onFavoritePress={handleCategoryFavoritePress}
+                    theme={theme}
+                  />
+                );
+              }}
+              keyExtractor={(item) => item}
+              initialScrollIndex={Math.max(
+                0,
+                categories.indexOf(selectedCategory),
+              )}
+              contentContainerStyle={{
+                paddingTop: Spacing.sm,
+              }}
+              showsVerticalScrollIndicator={false}
+            />
+          </Animated.View>
+        </View>
+      </Modal>
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  header: {
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  menuButton: {
+    width: 44,
+    height: 44,
+    borderRadius: BorderRadius.md,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  guideToggle: {
+    width: 44,
+    height: 44,
+    borderRadius: BorderRadius.md,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchContainer: {
+    flex: 1,
+    maxWidth: 350,
+  },
+  searchContainerCompact: {
+    maxWidth: 300,
+  },
+  selectedCategoryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  selectedCategoryText: {
+    flex: 1,
+    marginRight: Spacing.md,
+  },
+  listContainer: {
+    flex: 1,
+  },
+  splitRow: {
+    flex: 1,
+    flexDirection: "row-reverse",
+  },
+  splitColumn: {
+    flex: 1,
+  },
+  previewPaneSide: {
+    flex: 1,
+    paddingTop: Spacing.md,
+  },
+  previewPaneTop: {
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
+  },
+  previewInfo: {
+    marginTop: Spacing.sm,
+  },
+  listHeader: {
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+  },
+  listHeaderWrapper: {
+    zIndex: 1,
+  },
+  categoryHeader: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.sm,
+  },
+  categoryTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: Spacing.md,
+  },
+  favoriteCategoryIcon: {
+    marginRight: 4,
+  },
+  categoryTitle: {},
+  categoryTitleCompact: {
+    fontSize: 16,
+  },
+  categoryCount: {
+    fontSize: 12,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: Spacing["4xl"],
+  },
+  drawerOverlay: {
+    flex: 1,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#000",
+  },
+  drawer: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: DRAWER_WIDTH,
+    shadowColor: "#000",
+    shadowOffset: { width: 2, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  drawerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.1)",
+  },
+  closeButton: {
+    padding: Spacing.xs,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  closeButtonFocused: {},
+
+  categoryItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    marginHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.md,
+    // Always reserve borderWidth so focus colour change doesn't reflow
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  categoryItemLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  categoryStarIcon: {
+    marginRight: Spacing.xs,
+  },
+  categoryItemText: {
+    flex: 1,
+  },
+  categoryItemRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  categoryFavButton: {
+    padding: Spacing.xs,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  categoryFavButtonFocused: {},
+});

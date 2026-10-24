@@ -1,0 +1,3265 @@
+import React, {
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "react";
+import {
+  StyleSheet,
+  View,
+  Pressable,
+  Modal,
+  ActivityIndicator,
+  ScrollView,
+  Platform,
+  ViewStyle,
+  StatusBar,
+  type LayoutChangeEvent,
+  PermissionsAndroid,
+  findNodeHandle,
+  useWindowDimensions,
+  AppState,
+  AppStateStatus,
+  BackHandler,
+} from "react-native";
+import { Image } from "expo-image";
+import { Ionicons } from "@expo/vector-icons";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  withSpring,
+  runOnJS,
+} from "react-native-reanimated";
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
+import * as Haptics from "expo-haptics";
+import { useKeepAwake } from "expo-keep-awake";
+import * as ScreenOrientation from "expo-screen-orientation";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { ThemedText } from "@/components/ThemedText";
+import { useTheme } from "@/hooks/useTheme";
+import { useResponsive } from "@/hooks/useResponsive";
+import { useOrientation } from "@/hooks/useOrientation";
+import { Spacing, BorderRadius } from "@/constants/theme";
+import { parseHLSQualities, isHLSStream } from "@/lib/hls-quality-parser";
+import { parseDASHQualities, isDASHStream } from "@/lib/dash-quality-parser";
+import { parseMSSQualities, isMSSStream } from "@/lib/mss-quality-parser";
+import { setManualOrientationLock } from "@/lib/orientation";
+import { Channel } from "@/types/playlist";
+import { getChannelPlayerEngine, setChannelPlayerEngine } from "@/lib/storage";
+import {
+  TvPlayerView,
+  TvPlayerCommands,
+  NativeAudioTrack,
+  NativeSubtitleTrack,
+} from "../../modules/tv-player/src/index";
+import { TVFocusablePressable } from "@/components/TVFocusablePressable";
+
+const isTV = Platform.isTV;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const SEEK_MS = 10_000;
+// On TV controls stay visible until the user presses Back/Menu to hide them.
+// On phone/tablet they auto-hide after CONTROLS_TIMEOUT_MS of inactivity.
+const CONTROLS_TIMEOUT_MS = 4_000;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatTime(ms: number): string {
+  if (!ms || ms <= 0) return "0:00";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0)
+    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface DRMConfig {
+  /** "fairplay" is reserved for future iOS support and is a no-op on Android. */
+  type: "widevine" | "playready" | "clearkey" | "fairplay";
+  licenseServer?: string;
+  /** Embedded ClearKey key (KID:KEY or JSON) when no license server is involved. */
+  licenseKey?: string;
+  headers?: Record<string, string>;
+  certificateUrl?: string;
+  /** Raw base64 PSSH initialization data extracted from DASH manifests. */
+  pssh?: string;
+}
+
+export interface VideoQuality {
+  label: string;
+  resolution: string;
+  bitrate?: number;
+  url?: string;
+}
+
+export interface AudioTrack {
+  id: string;
+  label: string;
+  language: string;
+  isDefault?: boolean;
+}
+
+export interface SubtitleTrack {
+  id: string;
+  label: string;
+  language: string;
+  url?: string;
+}
+
+export interface AdvancedVideoPlayerProps {
+  source: string;
+  title?: string;
+  subtitle?: string;
+  poster?: string;
+  channelId?: string;
+  autoPlay?: boolean;
+  backgroundPlay?: boolean;
+  playerEngine?: "exoplayer" | "vlc";
+  drm?: DRMConfig;
+  headers?: Record<string, string>;
+  qualities?: VideoQuality[];
+  audioTracks?: AudioTrack[];
+  subtitleTracks?: SubtitleTrack[];
+  recentChannels?: Channel[];
+  onError?: (error: string) => void;
+  onBack?: () => void;
+  onNext?: () => void;
+  onPrevious?: () => void;
+  onChannelSelect?: (channelId: string) => void;
+  isFavorite?: boolean;
+  onFavoritePress?: () => void;
+  isLive?: boolean;
+}
+
+type ContentFit = "contain" | "cover" | "fill";
+const CONTENT_FIT_OPTIONS: {
+  label: string;
+  icon: string;
+  value: ContentFit;
+}[] = [
+  { label: "Fit", icon: "scan-outline", value: "contain" },
+  { label: "Fill", icon: "expand-outline", value: "cover" },
+  { label: "Stretch", icon: "resize-outline", value: "fill" },
+];
+
+let notificationPermissionSessionResolved = false;
+
+const ensureNotificationPermission = async (): Promise<boolean> => {
+  if (
+    Platform.OS !== "android" ||
+    parseInt(String(Platform.Version), 10) < 33
+  ) {
+    return true;
+  }
+  if (notificationPermissionSessionResolved) return true;
+  try {
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+    notificationPermissionSessionResolved =
+      granted === PermissionsAndroid.RESULTS.GRANTED;
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (error) {
+    console.error("Permission request failed:", error);
+    return false;
+  }
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
+  source,
+  title,
+  subtitle,
+  poster,
+  channelId,
+  autoPlay = true,
+  backgroundPlay = false,
+  playerEngine: defaultEngine = "exoplayer",
+  headers,
+  drm,
+  qualities: propQualities = [],
+  audioTracks: propAudioTracks = [],
+  subtitleTracks: propSubtitleTracks = [],
+  recentChannels = [],
+  onError,
+  onBack,
+  onNext,
+  onPrevious,
+  onChannelSelect,
+  isFavorite,
+  onFavoritePress,
+  isLive = true,
+}: AdvancedVideoPlayerProps) {
+  const { theme } = useTheme();
+  useKeepAwake();
+
+  const insets = useSafeAreaInsets();
+  const { playerControls, isUltraWide } = useResponsive();
+  // useWindowDimensions updates immediately on rotation; Dimensions.get('screen')
+  // used by useResponsive can lag or return physical screen size on Android.
+  const { width, height } = useWindowDimensions();
+  // Live orientation — the rotate tool button toggles between a forced
+  // landscape lock and a forced portrait lock.
+  const { isPortrait } = useOrientation();
+
+  // ── Refs ─────────────────────────────────────────────────────────────────
+  const tvPlayerRef = useRef<any>(null);
+  // Track whether the native view has mounted and is ready to receive commands
+  const nativeReadyRef = useRef(false);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref mirror of showControls — always in sync, read by TVEventHandler closure
+  const showControlsRef = useRef(false);
+  // Ref mirror of isBackgroundPlaying — read by TVEventHandler closure
+  const isBackgroundPlayingRef = useRef(false);
+
+  // TV focus routing — refs for nextFocus wiring between the three control rows
+  const backBtnRef = useRef<any>(null);
+  const prevBtnRef = useRef<any>(null);
+  const playPauseBtnRef = useRef<any>(null);
+  const nextBtnRef = useRef<any>(null);
+  const seekBarRef = useRef<View | React.ComponentRef<typeof Pressable> | null>(
+    null,
+  );
+  const onSeekBarLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) seekTooltipBarWidth.value = w;
+    // Measure the bar's absolute screen X so the Pan worklet can position the
+    // thumb via (evt.absoluteX - pageX) / width — the generic "thumb follows
+    // finger" behaviour. evt.x can be misreported on some RNGH/Android builds.
+    seekBarRef.current?.measureInWindow((x) => {
+      seekBarPageX.value = x;
+    });
+    // seekTooltipBarWidth / seekBarPageX are stable shared value refs — excluded
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const firstToolBtnRef = useRef<any>(null);
+  const recentBtnRef = useRef<any>(null);
+  const favoriteBtnRef = useRef<any>(null);
+  const settingsBtnRef = useRef<any>(null);
+  const bgAudioBtnRef = useRef<any>(null);
+  const aspectBtnRef = useRef<any>(null);
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  // Controls always start hidden. On TV they appear on the first OK press.
+  // On phone they appear on the first tap.
+  const [showControls, setShowControlsState] = useState(false);
+  const [seekBarFocused, setSeekBarFocused] = useState(false);
+  // Mirror of seekBarFocused for the TV remote event handler closure, which
+  // captures stale state otherwise. Both are needed: state triggers a
+  // re-render for the focus style, ref is read in a long-lived callback.
+  const seekBarFocusedRef = useRef(false);
+  // Tracks whether the in-progress seek-drag has been committed/cancelled.
+  // beginSeekDrag sets it false; commit/cancel set it true. onFinalize reads
+  // it to resume playback when the pan gesture fails (e.g. a tap that never
+  // reaches minDistance) after beginSeekDrag already paused the player.
+  const seekCommittedRef = useRef(true);
+  // Node handles for nextFocus wiring — populated via onLayout callbacks
+  const [nh, setNh] = useState<{
+    backBtn: number | null;
+    prevBtn: number | null;
+    playPause: number | null;
+    nextBtn: number | null;
+    seekBar: number | null;
+    firstTool: number | null;
+    recentBtn: number | null;
+    favoriteBtn: number | null;
+    settingsBtn: number | null;
+    bgAudioBtn: number | null;
+    aspectBtn: number | null;
+  }>({
+    backBtn: null,
+    prevBtn: null,
+    playPause: null,
+    nextBtn: null,
+    seekBar: null,
+    firstTool: null,
+    recentBtn: null,
+    favoriteBtn: null,
+    settingsBtn: null,
+    bgAudioBtn: null,
+    aspectBtn: null,
+  });
+  // Track how many node handles we've collected — show controls only after
+  // the critical ones (back, playPause, seekBar) are ready on TV.
+  const nhReadyCount = useRef(0);
+  const NH_READY_MIN = 3; // backBtn, playPause, seekBar
+  const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [positionMs, setPositionMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(0);
+
+  // Runtime live/VOD detection: if ExoPlayer reports a finite, positive duration
+  // we override the isLive prop and treat the stream as VOD. This handles the
+  // common case where every M3U channel has isLive=true hardcoded in the
+  // playlist but the stream is actually a VOD file (MP4, VOD HLS, etc.).
+  // C.TIME_UNSET is exposed as 0 or a very large value by the position poller;
+  // we treat anything over 10 hours as "effectively unknown" (live radio/TV).
+  const MAX_VOD_DURATION_MS = 10 * 60 * 60 * 1000; // 10 hours
+  const effectiveIsLive =
+    durationMs > 0 && durationMs < MAX_VOD_DURATION_MS ? false : isLive;
+  const [isBackgroundPlaying, setIsBackgroundPlaying] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [contentFit, setContentFit] = useState<ContentFit>("contain");
+  const [currentSource, setCurrentSource] = useState(source);
+  const [nativeReady, setNativeReady] = useState(false);
+  const [detectedQualities, setDetectedQualities] = useState<VideoQuality[]>(
+    [],
+  );
+  const [selectedQuality, setSelectedQuality] = useState("auto");
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState<string | null>(
+    null,
+  );
+  const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState<
+    string | null
+  >(null);
+  // Native tracks reported by ExoPlayer via onTracksChange
+  const [nativeAudioTracks, setNativeAudioTracks] = useState<
+    NativeAudioTrack[]
+  >([]);
+  const [nativeSubtitleTracks, setNativeSubtitleTracks] = useState<
+    NativeSubtitleTrack[]
+  >([]);
+  const [showRecentPanel, setShowRecentPanel] = useState(false);
+  // Ref mirror for the back ladder / TV event closures
+  const showRecentPanelRef = useRef(false);
+  showRecentPanelRef.current = showRecentPanel;
+
+  // Per-channel player engine — loaded from storage, falls back to defaultEngine prop
+  const [activePlayerEngine, setActivePlayerEngine] = useState<
+    "exoplayer" | "vlc"
+  >(defaultEngine);
+
+  // Modals
+  const [showStopAudioModal, setShowStopAudioModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showQualityModal, setShowQualityModal] = useState(false);
+  const [showAudioModal, setShowAudioModal] = useState(false);
+  const [showSubtitleModal, setShowSubtitleModal] = useState(false);
+  const [showPlayerEngineModal, setShowPlayerEngineModal] = useState(false);
+  const [showFallbackDialog, setShowFallbackDialog] = useState(false);
+
+  const [isInPiP, setIsInPiP] = useState(false);
+  // Ref mirror — read by setShowControls guard to block controls in PiP
+  const isInPiPRef = useRef(false);
+  // Transient flag set when the user taps PiP, cleared by handlePipChange.
+  // Bridges the gap between handleEnterPip() and the onPictureInPictureModeChanged
+  // callback so the AppState handler doesn't pause during PiP entry.
+  const isEnteringPipRef = useRef(false);
+  const [pipSupported, setPipSupported] = useState(true);
+
+  // Track consecutive errors for automatic fallback
+  const consecutiveErrorCountRef = useRef(0);
+  const currentEngineRef = useRef(activePlayerEngine);
+  currentEngineRef.current = activePlayerEngine;
+
+  // Seek bar drag state — tracks the thumb position while the user is
+  // dragging. When the drag ends we commit the seek to the player.
+  const [seekDrag, setSeekDrag] = useState<{
+    active: boolean;
+    progress: number; // 0–1
+  }>({ active: false, progress: 0 });
+  const seekDragPreviewMs = seekDrag.active
+    ? Math.floor(seekDrag.progress * durationMs)
+    : null;
+
+  // Animated values for YouTube-style seek bar feedback
+  // trackScale: 0→1 animates the track height expanding on drag begin
+  // thumbScale: 0→1 animates the thumb growing on drag begin
+  // tooltipOpacity: fades the time tooltip in/out
+  // tooltipProgress: 0–1 position the tooltip should follow (scrub or playback)
+  // tooltipBarWidth: bar width in px, used for the edge-clamp translateX
+  const seekTrackScale = useSharedValue(0);
+  const seekThumbScale = useSharedValue(0);
+  const seekTooltipOpacity = useSharedValue(0);
+  const seekTooltipProgress = useSharedValue(0);
+  const seekTooltipBarWidth = useSharedValue(1);
+
+  // Seek bar's absolute screen X (left edge), measured via measureInWindow on
+  // layout. Used so the thumb follows the finger absolutely
+  // (evt.absoluteX - pageX) / width — the generic mobile seekbar behaviour —
+  // without relying on evt.x, which some RNGH/Android builds misreport.
+  const seekBarPageX = useSharedValue(0);
+
+  // Seek flash
+  const [seekFlash, setSeekFlash] = useState<{
+    visible: boolean;
+    dir: "backward" | "forward";
+  }>({ visible: false, dir: "forward" });
+
+  const qualities =
+    detectedQualities.length > 0 ? detectedQualities : propQualities;
+  // Use native tracks from ExoPlayer when available, fall back to prop tracks
+  const audioTracks =
+    nativeAudioTracks.length > 0
+      ? nativeAudioTracks
+      : propAudioTracks.map((t, i) => ({
+          groupIndex: 0,
+          trackIndex: i,
+          id: t.id,
+          label: t.label,
+          language: t.language,
+          isSelected: false,
+        }));
+  const subtitleTracks =
+    nativeSubtitleTracks.length > 0
+      ? nativeSubtitleTracks
+      : propSubtitleTracks.map((t, i) => ({
+          groupIndex: 0,
+          trackIndex: i,
+          id: t.id,
+          label: t.label,
+          language: t.language,
+          isSelected: false,
+        }));
+
+  // ── Animations ────────────────────────────────────────────────────────────
+  const controlsOpacity = useSharedValue(0);
+  const recentTranslateX = useSharedValue(280);
+  const seekFlashOpacity = useSharedValue(0);
+  const lockOpacity = useSharedValue(0);
+
+  const animControls = useAnimatedStyle(() => ({
+    opacity: controlsOpacity.value,
+  }));
+  const animRecent = useAnimatedStyle(() => ({
+    transform: [{ translateX: recentTranslateX.value }],
+  }));
+  const animSeekFlash = useAnimatedStyle(() => ({
+    opacity: seekFlashOpacity.value,
+  }));
+  const animLock = useAnimatedStyle(() => ({ opacity: lockOpacity.value }));
+
+  // ── Controls show/hide ────────────────────────────────────────────────────
+
+  // Single source of truth for setting controls visibility.
+  // Drives both the state (for conditional rendering / focusability) and animation.
+  const setShowControls = useCallback(
+    (visible: boolean) => {
+      // Never show controls while in PiP — the tiny window can't be tapped
+      // and controls would cover the entire video.
+      if (visible && isInPiPRef.current) return;
+      showControlsRef.current = visible;
+      setShowControlsState(visible);
+      controlsOpacity.value = withTiming(visible ? 1 : 0, { duration: 200 });
+    },
+    [controlsOpacity],
+  );
+
+  // Track whether any modal is open — used by scheduleHide to avoid
+  // hiding controls while a modal is visible.
+  const anyModalOpenRef = useRef(false);
+  useEffect(() => {
+    anyModalOpenRef.current =
+      showSettingsModal ||
+      showQualityModal ||
+      showAudioModal ||
+      showSubtitleModal ||
+      showPlayerEngineModal;
+  }, [
+    showSettingsModal,
+    showQualityModal,
+    showAudioModal,
+    showSubtitleModal,
+    showPlayerEngineModal,
+  ]);
+
+  // Start/reset the auto-hide timer for both TV and phone.
+  const scheduleHide = useCallback(() => {
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    controlsTimerRef.current = setTimeout(() => {
+      // Don't hide while a modal is open
+      if (anyModalOpenRef.current) return;
+      setShowControls(false);
+    }, CONTROLS_TIMEOUT_MS);
+  }, [setShowControls]);
+
+  // Cancel any pending auto-hide timer — used when entering PiP to prevent
+  // the timer from firing and re-showing controls during the transition.
+  const cancelHideTimer = useCallback(() => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+  }, []);
+
+  const showAndScheduleHide = useCallback(() => {
+    setShowControls(true);
+    scheduleHide();
+  }, [setShowControls]);
+
+  // Keep ref up-to-date so the TVEventHandler closure can read it without
+  // needing to be recreated on every render.
+  const scheduleHideRef = useRef(scheduleHide);
+  const showAndScheduleHideRef = useRef(showAndScheduleHide);
+  const cancelHideTimerRef = useRef(cancelHideTimer);
+  useEffect(() => {
+    scheduleHideRef.current = scheduleHide;
+  }, [scheduleHide]);
+  useEffect(() => {
+    showAndScheduleHideRef.current = showAndScheduleHide;
+  }, [showAndScheduleHide]);
+  useEffect(() => {
+    cancelHideTimerRef.current = cancelHideTimer;
+  }, [cancelHideTimer]);
+
+  // ── TV nextFocus node handles ─────────────────────────────────────────────
+  // Computed via onLayout callbacks on each ref'd button — no timeouts.
+  // Each callback updates one slot in the nh state object.
+  const updateNh = useCallback((key: keyof typeof nh, e: any) => {
+    const nodeHandle = findNodeHandle(e.target);
+    if (nodeHandle == null) return;
+    setNh((prev) => {
+      if (prev[key] === nodeHandle) return prev; // no change
+      return { ...prev, [key]: nodeHandle };
+    });
+  }, []);
+
+  // ── Source change ─────────────────────────────────────────────────────────
+
+  // When the parent changes the source URL (channel switch), propagate it.
+  useEffect(() => {
+    setCurrentSource(source);
+  }, [source]);
+
+  // ── Quality detection (HLS, DASH, MSS) ─────────────────────────────────────
+  useEffect(() => {
+    if (!currentSource) return;
+
+    // Forward the stream's custom headers so authenticated manifests don't
+    // return 401/403 during quality detection.
+    const reqHeaders =
+      headers && Object.keys(headers).length > 0 ? headers : undefined;
+
+    let parser: Promise<VideoQuality[]>;
+
+    if (isHLSStream(currentSource)) {
+      parser = parseHLSQualities(currentSource, reqHeaders);
+    } else if (isDASHStream(currentSource)) {
+      parser = parseDASHQualities(currentSource, reqHeaders);
+    } else if (isMSSStream(currentSource)) {
+      parser = parseMSSQualities(currentSource, reqHeaders);
+    } else {
+      return;
+    }
+
+    parser
+      .then((q) => {
+        if (q.length > 0) setDetectedQualities(q);
+      })
+      .catch(() => {});
+  }, [currentSource, headers]);
+
+  // ── Load per-channel player engine ────────────────────────────────────────
+  useEffect(() => {
+    if (!channelId) {
+      setActivePlayerEngine(defaultEngine);
+      return;
+    }
+    let cancelled = false;
+    getChannelPlayerEngine(channelId).then((saved) => {
+      if (!cancelled) {
+        setActivePlayerEngine(saved || defaultEngine);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, defaultEngine]);
+
+  // ── Change player engine (saves per-channel) ──────────────────────────────
+  const changePlayerEngine = useCallback(
+    (engine: "exoplayer" | "vlc") => {
+      setActivePlayerEngine(engine);
+      if (channelId) {
+        setChannelPlayerEngine(channelId, engine);
+      }
+      if (tvPlayerRef.current) {
+        TvPlayerCommands.setPlayerEngine(tvPlayerRef, engine);
+        setError(null);
+        setIsLoading(true);
+        consecutiveErrorCountRef.current = 0;
+        TvPlayerCommands.loadSource(tvPlayerRef, {
+          url: currentSource,
+          headers:
+            headers && Object.keys(headers).length > 0 ? headers : undefined,
+          drmType: drm?.type,
+          drmLicenseUrl: drm?.licenseServer,
+          drmLicenseKey: drm?.licenseKey,
+          drmHeaders: drm?.headers,
+          drmPssh: drm?.pssh,
+          autoPlay: true,
+        });
+      }
+    },
+    [channelId, currentSource, headers, drm],
+  );
+
+  // ── Native player load ────────────────────────────────────────────────────
+  const loadSource = useCallback(() => {
+    if (!tvPlayerRef.current) return;
+    setIsLoading(true);
+    setError(null);
+    consecutiveErrorCountRef.current = 0;
+    TvPlayerCommands.setPlayerEngine(tvPlayerRef, activePlayerEngine);
+    TvPlayerCommands.loadSource(tvPlayerRef, {
+      url: currentSource,
+      headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
+      drmType: drm?.type,
+      drmLicenseUrl: drm?.licenseServer,
+      drmLicenseKey: drm?.licenseKey,
+      drmHeaders: drm?.headers,
+      drmPssh: drm?.pssh,
+      autoPlay,
+    });
+  }, [currentSource, headers, drm, autoPlay, activePlayerEngine]);
+
+  // Run loadSource whenever these values change, but guard on native readiness.
+  useEffect(() => {
+    if (nativeReadyRef.current) {
+      loadSource();
+    }
+    // nativeReadyRef is not reactive — intentionally omitted from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSource, headers, drm, autoPlay, activePlayerEngine]);
+
+  // Keep a ref to the latest loadSource so the callback ref always calls the current version
+  const loadSourceRef = useRef(loadSource);
+  loadSourceRef.current = loadSource;
+
+  // Native view callback ref — fires when the native view mounts.
+  const nativeViewRef = useCallback((node: any) => {
+    (tvPlayerRef as React.MutableRefObject<any>).current = node;
+    if (node && !nativeReadyRef.current) {
+      // The native view just mounted; trigger initial load.
+      nativeReadyRef.current = true;
+      setNativeReady(true);
+      // Slight delay to let the native view fully initialise its surface.
+      setTimeout(() => loadSourceRef.current(), 50);
+    }
+  }, []);
+
+  // Release on unmount
+  useEffect(() => {
+    return () => {
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+      // NOTE: We do NOT call any native commands here. The native
+      // onDetachedFromWindow() handles all player cleanup (release,
+      // pause, disableBackgroundAudio). Dispatching async native calls
+      // from JS creates a threading race with the UI-thread
+      // onDetachedFromWindow(), which can crash VLC's native resources.
+    };
+  }, []);
+
+  // Sync background audio state on mount
+  useEffect(() => {
+    const syncBackgroundState = async () => {
+      const isEnabled =
+        await TvPlayerCommands.isBackgroundAudioEnabled(tvPlayerRef);
+      if (isEnabled !== undefined) {
+        isBackgroundPlayingRef.current = isEnabled;
+        setIsBackgroundPlaying(isEnabled);
+      }
+    };
+
+    // Small delay to ensure native view is ready
+    const timer = setTimeout(syncBackgroundState, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Handle app state changes — background audio is only enabled when
+  // the user explicitly toggles it or the backgroundPlay setting is on.
+  useEffect(() => {
+    const handleAppStateChange = async (nextAppState: AppStateStatus) => {
+      if (nextAppState === "background" || nextAppState === "inactive") {
+        // Mobile: do NOT auto-enter PiP — user must tap the PiP button explicitly
+        // If background play is disabled, stop playback when app goes to background
+        // Skip if in PiP or entering PiP — the system PiP window manages its own playback.
+        if (
+          !backgroundPlay &&
+          !isInPiPRef.current &&
+          !isEnteringPipRef.current
+        ) {
+          // Stop background service if it was running
+          if (isBackgroundPlayingRef.current) {
+            TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+          }
+          // ALWAYS pause the player when background play is disabled
+          TvPlayerCommands.pause(tvPlayerRef);
+          // Drop the foreground session so the system UI clears instead of
+          // showing a dead resume tile for a player that can't continue.
+          TvPlayerCommands.releaseMediaSession(tvPlayerRef);
+        }
+      } else if (nextAppState === "active") {
+        // App came back to foreground
+        if (isTV && isBackgroundPlayingRef.current) {
+          // Re-attach video surface if background audio was active
+          TvPlayerCommands.play(tvPlayerRef);
+        }
+
+        // Re-publish to the system media UI (released on backgrounding).
+        // Native play()/onReady() also ensure this; this covers the
+        // paused-in-foreground case so the resume tile persists.
+        if (!backgroundPlay && nativeReady) {
+          TvPlayerCommands.ensureMediaSession(tvPlayerRef);
+        }
+
+        // Enable background audio if setting is on and video is playing
+        if (
+          backgroundPlay &&
+          isPlaying &&
+          nativeReady &&
+          !isBackgroundPlayingRef.current
+        ) {
+          // Small delay to ensure everything is ready
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          if (!(await ensureNotificationPermission())) return;
+
+          TvPlayerCommands.enableBackgroundAudio(tvPlayerRef);
+          TvPlayerCommands.setMediaMetadata(tvPlayerRef, {
+            title: title || "",
+            artist: subtitle || "Live TV",
+            artworkUri: poster,
+          });
+        }
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+    return () => subscription.remove();
+  }, [backgroundPlay, isPlaying, nativeReady, title, subtitle, poster]);
+
+  // Enable background audio when the setting is on and video is playing.
+  useEffect(() => {
+    if (!backgroundPlay || !isPlaying || !nativeReady) return;
+
+    const enableBackground = async () => {
+      // Small delay to ensure player is fully initialized
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      if (!(await ensureNotificationPermission())) return;
+
+      TvPlayerCommands.enableBackgroundAudio(tvPlayerRef);
+      TvPlayerCommands.setMediaMetadata(tvPlayerRef, {
+        title: title || "",
+        artist: subtitle || "Live TV",
+        artworkUri: poster,
+      });
+    };
+
+    enableBackground();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backgroundPlay, isPlaying, nativeReady]);
+
+  // PiP keeps the user's aspect-ratio mode untouched — forcing "cover" here
+  // center-crops whenever the tiny window's ratio differs from the stream's
+  // display ratio (anamorphic/4:3 sources), making the video look zoomed in.
+
+  // Shared handler for PiP state changes — driven by the native view event.
+  const handlePipChange = useCallback(
+    (isInPip: boolean) => {
+      // Clear the intent flag — onPictureInPictureModeChanged has fired
+      isEnteringPipRef.current = false;
+      isInPiPRef.current = isInPip;
+      setIsInPiP(isInPip);
+      if (isInPip) {
+        // Cancel any pending auto-hide timer — prevents controls from briefly
+        // re-appearing during the PiP transition.
+        cancelHideTimerRef.current();
+        // Hide controls immediately — the PiP window is too small
+        setShowControls(false);
+      }
+      // On exit, playback continuity (surface re-attach + conditional resume)
+      // is owned by the native side — no JS play() here to avoid double paths.
+    },
+    [setShowControls],
+  );
+
+  useEffect(() => {
+    if (isTV || !nativeReady) return;
+    let cancelled = false;
+    const check = async () => {
+      const supported = await TvPlayerCommands.isPiPSupported(tvPlayerRef);
+      if (!cancelled) setPipSupported(supported === true);
+    };
+    void check();
+    return () => {
+      cancelled = true;
+    };
+  }, [nativeReady]);
+
+  // When the recent-channels panel is open, the controls behind it must not
+  // take D-pad focus — otherwise the D-pad can walk around "under" the panel.
+  const controlsFocusable = showControls && !showRecentPanel;
+
+  // ── TV back ladder ──────────────────────────────────────────────────────────
+  // Shared by the TVEventHandler menu/back events and the Android BACK key
+  // (BackHandler). KEYCODE_BACK is NOT mapped to a TVEventHandler event type,
+  // so without the BackHandler listener a normal BACK press would bypass this
+  // ladder and navigate straight out of the player.
+  const handleBackLadder = useCallback(() => {
+    if (showControlsRef.current) {
+      showControlsRef.current = false;
+      setShowControlsState(false);
+      controlsOpacity.value = withTiming(0, { duration: 200 });
+      setShowRecentPanel(false);
+    } else if (showRecentPanelRef.current) {
+      setShowRecentPanel(false);
+    } else if (isBackgroundPlayingRef.current) {
+      // Background audio is on — ask the user whether to stop it or keep
+      // it playing before navigating away.
+      setShowStopAudioModal(true);
+    } else {
+      // Controls already hidden — navigate back.
+      // Do NOT call TvPlayerCommands.pause() here — it's async and
+      // creates a threading race with onDetachedFromWindow(). The native
+      // cleanup in TvPlayerView handles stopping/releasing the player.
+      onBack?.();
+    }
+    return true;
+  }, [onBack, controlsOpacity]);
+
+  // Intercept the Android BACK key so it runs the ladder above instead of
+  // letting React Navigation pop the player immediately. RN's Modal
+  // subscribes its own hardwareBackPress listener while open, and the most
+  // recently added listener runs first, so open modals still dismiss
+  // themselves before this handler fires.
+  useEffect(() => {
+    if (!isTV) return;
+    const sub = BackHandler.addEventListener(
+      "hardwareBackPress",
+      handleBackLadder,
+    );
+    return () => sub.remove();
+  }, [handleBackLadder]);
+
+  // ── TV D-pad handler ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isTV) return;
+
+    // react-native-tvos uses a new object-based TVEventHandler API.
+    // Import directly from the library path — it is NOT exported from the
+    // main react-native package index.
+    let TVEventHandler: any;
+    try {
+      TVEventHandler =
+        require("react-native/Libraries/Components/TV/TVEventHandler").default;
+    } catch (_) {
+      return;
+    }
+    if (!TVEventHandler?.addListener) return;
+
+    const subscription = TVEventHandler.addListener((evt: any) => {
+      if (!evt) return;
+      const { eventType } = evt;
+
+      if (["up", "down", "playPause"].includes(eventType)) {
+        // Directional / play-pause keys show controls and reset the hide timer
+        if (!showControlsRef.current) {
+          showAndScheduleHideRef.current();
+        } else {
+          scheduleHideRef.current();
+        }
+      } else if (eventType === "left" || eventType === "right") {
+        // D-pad left/right on seek bar: scrub 10s
+        if (showControlsRef.current && seekBarFocusedRef.current) {
+          const dir = eventType === "left" ? -SEEK_MS : SEEK_MS;
+          handleSeek(dir);
+        } else if (!showControlsRef.current) {
+          showAndScheduleHideRef.current();
+        } else {
+          scheduleHideRef.current();
+        }
+      } else if (eventType === "select") {
+        // OK button: if controls are hidden, show them (video keeps playing).
+        // Focus lands on Play/Pause automatically via hasTVPreferredFocus,
+        // so the next OK press will pause/resume via that button's onPress.
+        // If controls are already visible, the focused Pressable handles the
+        // press itself — we just reset the hide timer here.
+        if (!showControlsRef.current) {
+          showAndScheduleHideRef.current();
+        } else {
+          scheduleHideRef.current();
+        }
+      } else if (eventType === "menu" || eventType === "back") {
+        handleBackLadder();
+      } else if (
+        eventType === "channelUp" ||
+        eventType === "channelDown"
+      ) {
+        // Channel +/- keys skip to the next/previous channel like a
+        // traditional TV. Stop background audio first so the old stream
+        // doesn't keep playing over the new one.
+        const nav = eventType === "channelUp" ? onNext : onPrevious;
+        if (nav) {
+          if (isBackgroundPlayingRef.current) {
+            TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+          }
+          nav();
+        }
+      }
+    });
+
+    return () => {
+      try {
+        subscription?.remove();
+      } catch (_) {}
+    };
+    // onBack is stable from the parent; controlsOpacity is a shared value (stable ref).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onBack, handleBackLadder, onNext, onPrevious]);
+
+  // ── Playback actions ──────────────────────────────────────────────────────
+
+  const handlePlayPause = useCallback(() => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (isPlaying) {
+      TvPlayerCommands.pause(tvPlayerRef);
+    } else {
+      TvPlayerCommands.play(tvPlayerRef);
+    }
+    scheduleHideRef.current();
+  }, [isPlaying]);
+
+  const handleSeek = useCallback(
+    (offsetMs: number) => {
+      if (durationMs <= 0) return;
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const newPos = Math.max(0, Math.min(positionMs + offsetMs, durationMs));
+      TvPlayerCommands.seekTo(tvPlayerRef, newPos);
+      // Always resume playback after a D-pad seek — matches the mobile
+      // commitSeekDrag behaviour and prevents DRM/VOD streams from staying
+      // paused after seeking (ExoPlayer can flip playWhenReady off while it
+      // re-acquires the DRM keys for the new position).
+      TvPlayerCommands.play(tvPlayerRef);
+      scheduleHideRef.current();
+    },
+    [positionMs, durationMs],
+  );
+
+  const handleQualitySelect = useCallback(
+    (q: VideoQuality | "auto") => {
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (q === "auto") {
+        setSelectedQuality("auto");
+        setCurrentSource(source);
+      } else {
+        setSelectedQuality(q.label);
+        if (q.url) setCurrentSource(q.url);
+      }
+      setShowQualityModal(false);
+      scheduleHideRef.current();
+    },
+    [source],
+  );
+
+  const handleBackgroundToggle = useCallback(async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (isBackgroundPlaying) {
+      TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+    } else {
+      if (!(await ensureNotificationPermission())) return;
+      TvPlayerCommands.enableBackgroundAudio(tvPlayerRef);
+      TvPlayerCommands.setMediaMetadata(tvPlayerRef, {
+        title: title || "",
+        artist: subtitle || "Live TV",
+        artworkUri: poster,
+      });
+    }
+    scheduleHideRef.current();
+  }, [isBackgroundPlaying]);
+
+  // Hide controls before entering PiP so the title/controls don't flash
+  // in the PiP window during the transition.
+  const handleEnterPip = useCallback(() => {
+    if (!isPlaying) return;
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    cancelHideTimerRef.current();
+    setShowControls(false);
+    // Set intent flag BEFORE calling native enterPip — the AppState handler
+    // fires during the PiP transition and must not pause the player.
+    isEnteringPipRef.current = true;
+    void Promise.resolve(TvPlayerCommands.enterPip(tvPlayerRef))
+      .then((entered) => {
+        if (entered !== true) isEnteringPipRef.current = false;
+      })
+      .catch(() => {
+        isEnteringPipRef.current = false;
+      });
+    // Safety net — never leave the flag stuck if the transition event is lost
+    // (unsupported OEMs, process pressure, etc.), otherwise backgrounding the
+    // app would never pause playback.
+    setTimeout(() => {
+      if (isEnteringPipRef.current && !isInPiPRef.current) {
+        isEnteringPipRef.current = false;
+      }
+    }, 3000);
+  }, [isPlaying]);
+
+  // Rotate the screen between landscape and portrait. Uses an explicit lock
+  // (not unlockAsync) so it also works when system auto-rotate is disabled.
+  const handleRotate = useCallback(async () => {
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await ScreenOrientation.lockAsync(
+        isPortrait
+          ? ScreenOrientation.OrientationLock.LANDSCAPE
+          : ScreenOrientation.OrientationLock.PORTRAIT_UP,
+      );
+      setManualOrientationLock(!isPortrait);
+    } catch (error) {
+      console.log("Orientation lock not supported:", error);
+    }
+    scheduleHideRef.current();
+  }, [isPortrait]);
+
+  // ── Channel navigation ────────────────────────────────────────────────────
+  // Stop background audio before switching channels so the old stream doesn't
+  // keep playing while the new PlayerScreen mounts and starts a fresh player.
+  const navigateToChannel = useCallback((fn?: () => void) => {
+    if (isBackgroundPlayingRef.current) {
+      TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+    }
+    fn?.();
+  }, []);
+
+  // ── Animations: panels ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    recentTranslateX.value = withSpring(showRecentPanel ? 0 : 280, {
+      damping: 20,
+    });
+  }, [showRecentPanel, recentTranslateX]);
+
+  useEffect(() => {
+    lockOpacity.value = withTiming(isLocked ? 1 : 0, { duration: 150 });
+  }, [isLocked, lockOpacity]);
+
+  // ── Gestures ──────────────────────────────────────────────────────────────
+
+  // Hide controls immediately — used by the dismiss layer.
+  const hideControls = useCallback(() => {
+    setShowControls(false);
+  }, [setShowControls]);
+
+  // Toggle controls on tap — use ref to avoid stale closure. The ref is always
+  // up-to-date because setShowControls updates it immediately when called.
+  // Use tapInProgressRef to prevent double-toggle when gesture fires alongside
+  // the overlay Pressable's onPress handler.
+  const tapInProgressRef = useRef(false);
+  const toggleControls = useCallback(() => {
+    if (tapInProgressRef.current) return;
+    tapInProgressRef.current = true;
+    setTimeout(() => {
+      tapInProgressRef.current = false;
+    }, 300);
+    // If controls are visible, hide them directly
+    if (showControlsRef.current) {
+      setShowControls(false);
+      return;
+    }
+    // Controls are hidden — show them
+    const showFn = showAndScheduleHideRef.current;
+    if (showFn) {
+      showFn();
+    } else {
+      setShowControls(true);
+    }
+  }, [setShowControls]);
+
+  const tapGesture = Gesture.Tap()
+    .numberOfTaps(1)
+    .onEnd(() => {
+      runOnJS(toggleControls)();
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd((evt) => {
+      if (durationMs <= 0) return;
+      const dir = evt.x < width / 2 ? "backward" : "forward";
+      runOnJS(handleSeek)(dir === "backward" ? -SEEK_MS : SEEK_MS);
+      if (!isTV)
+        runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+      runOnJS(setSeekFlash)({ visible: true, dir });
+      seekFlashOpacity.value = withTiming(1, { duration: 80 }, () => {
+        seekFlashOpacity.value = withTiming(0, { duration: 400 }, () => {
+          runOnJS(setSeekFlash)({ visible: false, dir });
+        });
+      });
+    });
+
+  const composedGesture = Gesture.Exclusive(doubleTapGesture, tapGesture);
+
+  // ── YouTube-style seek bar helpers ───────────────────────────────────────
+
+  const beginSeekDrag = useCallback((pct: number) => {
+    // Pause while scrubbing so the user sees the exact frame they're seeking to
+    TvPlayerCommands.pause(tvPlayerRef);
+    // Cancel auto-hide timer — controls must stay visible during scrubbing
+    cancelHideTimerRef.current();
+    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Mark the drag as uncommitted so onFinalize can recover if the pan
+    // gesture fails before onEnd fires (e.g. tap without minDistance).
+    seekCommittedRef.current = false;
+    setSeekDrag({ active: true, progress: pct });
+  }, []);
+
+  const updateSeekDrag = useCallback((pct: number) => {
+    setSeekDrag({ active: true, progress: pct });
+  }, []);
+
+  const commitSeekDrag = useCallback(
+    (progress: number) => {
+      TvPlayerCommands.seekTo(tvPlayerRef, Math.floor(progress * durationMs));
+      // Always resume playback after a seek — generic mobile behaviour
+      TvPlayerCommands.play(tvPlayerRef);
+      seekCommittedRef.current = true;
+      setSeekDrag({ active: false, progress });
+      // Re-arm the auto-hide timer now that scrubbing is done
+      scheduleHideRef.current();
+      if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    },
+    [durationMs],
+  );
+
+  const cancelSeekDrag = useCallback(() => {
+    // Gesture cancelled — resume playback (beginSeekDrag paused it on touch)
+    TvPlayerCommands.play(tvPlayerRef);
+    seekCommittedRef.current = true;
+    setSeekDrag({ active: false, progress: 0 });
+    scheduleHideRef.current();
+  }, []);
+
+  // Safety net: RNGH fires onFinalize for every gesture terminus, including
+  // failed gestures (touch without moving minDistance). In that case onBegin
+  // already paused the player but onEnd never runs, so commit/cancel never
+  // resume it. Re-arm here by falling back to seeking to the last known
+  // scrub position (the value captured during onBegin/onUpdate) and resuming.
+  const ensureSeekCommitted = useCallback(() => {
+    if (seekCommittedRef.current) return;
+    seekCommittedRef.current = true;
+    const pct = seekTooltipProgress.value;
+    if (durationMs > 0 && pct > 0) {
+      TvPlayerCommands.seekTo(tvPlayerRef, Math.floor(pct * durationMs));
+    }
+    TvPlayerCommands.play(tvPlayerRef);
+    setSeekDrag({ active: false, progress: 0 });
+    scheduleHideRef.current();
+  }, [durationMs]);
+
+  // Seek bar pan gesture — generic mobile behaviour:
+  //   • Touch → thumb jumps to the finger (absolute position)
+  //   • Drag → thumb follows the finger 1:1
+  //   • Playback pauses while scrubbing, seeks on release, resumes if needed
+  //   • A tap (<5px move) seeks to the touched position and resumes
+  // Position is derived from `evt.absoluteX` (screen coords) minus the bar's
+  // measured screen X — `evt.x` is misreported by some RNGH/Android builds,
+  // which was causing the thumb to snap to the end on touch.
+  const seekBarPan = Gesture.Pan()
+    .minDistance(2)
+    .onBegin((evt) => {
+      if (seekTooltipBarWidth.value <= 0 || durationMs <= 0) return;
+      const pct = Math.min(
+        1,
+        Math.max(
+          0,
+          (evt.absoluteX - seekBarPageX.value) / seekTooltipBarWidth.value,
+        ),
+      );
+      seekTrackScale.value = withSpring(1, { damping: 15, stiffness: 300 });
+      seekThumbScale.value = withSpring(1, { damping: 15, stiffness: 300 });
+      seekTooltipOpacity.value = withTiming(1, { duration: 120 });
+      runOnJS(beginSeekDrag)(pct);
+    })
+    .onUpdate((evt) => {
+      if (seekTooltipBarWidth.value <= 0 || durationMs <= 0) return;
+      const pct = Math.min(
+        1,
+        Math.max(
+          0,
+          (evt.absoluteX - seekBarPageX.value) / seekTooltipBarWidth.value,
+        ),
+      );
+      seekTooltipProgress.value = pct;
+      runOnJS(updateSeekDrag)(pct);
+    })
+    .onEnd((evt) => {
+      if (seekTooltipBarWidth.value <= 0 || durationMs <= 0) {
+        runOnJS(cancelSeekDrag)();
+      } else {
+        const pct = Math.min(
+          1,
+          Math.max(
+            0,
+            (evt.absoluteX - seekBarPageX.value) / seekTooltipBarWidth.value,
+          ),
+        );
+        // Quick tap or drag release — seek to the position and resume playback
+        runOnJS(commitSeekDrag)(pct);
+      }
+      seekTrackScale.value = withSpring(0, { damping: 18, stiffness: 300 });
+      seekThumbScale.value = withSpring(0, { damping: 18, stiffness: 300 });
+      seekTooltipOpacity.value = withTiming(0, { duration: 150 });
+    })
+    .onFinalize(() => {
+      // Safety: ensure animations always complete even if onEnd didn't fire
+      seekTrackScale.value = withSpring(0, { damping: 18, stiffness: 300 });
+      seekThumbScale.value = withSpring(0, { damping: 18, stiffness: 300 });
+      seekTooltipOpacity.value = withTiming(0, { duration: 150 });
+      // Recover playback if beginSeekDrag paused the player but onEnd never
+      // ran (pan gesture failed because the touch didn't move minDistance).
+      runOnJS(ensureSeekCommitted)();
+    });
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const progress = durationMs > 0 ? positionMs / durationMs : 0;
+
+  // Mirror the current playback progress into the tooltip's shared value so
+  // the tooltip's clamped translateX can follow the thumb during normal
+  // playback (the gesture worklet overwrites this while scrubbing).
+  const tooltipProgress = seekDrag.active ? seekDrag.progress : progress;
+  useEffect(() => {
+    seekTooltipProgress.value = tooltipProgress;
+    // seekTooltipProgress is a stable shared value ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tooltipProgress]);
+  const displayedRecent = recentChannels.slice(0, 5);
+
+  // Animated seek bar styles — track height expands from 4→8px, thumb grows
+  // from 14→22px, and the tooltip fades in when scrubbing starts.
+  const animSeekTrack = useAnimatedStyle(() => ({
+    height: 4 + seekTrackScale.value * 4, // 4px → 8px
+  }));
+  const animSeekThumb = useAnimatedStyle(() => ({
+    width: 14 + seekThumbScale.value * 8, // 14px → 22px
+    height: 14 + seekThumbScale.value * 8,
+    borderRadius: (14 + seekThumbScale.value * 8) / 2,
+    top: -((14 + seekThumbScale.value * 8) / 2) + 2,
+    marginLeft: -((14 + seekThumbScale.value * 8) / 2),
+  }));
+  const animSeekTooltip = useAnimatedStyle(() => {
+    // Clamp the tooltip horizontally so it stays inside the seekbar near the
+    // edges. The tooltip is minWidth:56 with marginLeft:-28, so its center
+    // must stay in [28, barWidth - 28]. translateX pulls it back inside.
+    const halfW = 28;
+    const barW = seekTooltipBarWidth.value;
+    const center = seekTooltipProgress.value * barW;
+    const minC = halfW;
+    const maxC = barW - halfW;
+    const clamped = Math.min(Math.max(center, minC), maxC);
+    const translateX = clamped - center;
+    return {
+      opacity: seekTooltipOpacity.value,
+      transform: [
+        { translateY: (1 - seekTooltipOpacity.value) * 6 },
+        { translateX },
+      ],
+    };
+  });
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <GestureHandlerRootView style={[st.root, { width, height }]}>
+      <StatusBar hidden />
+
+      {/* ── Video surface ───────────────────────────────────────────── */}
+      <GestureDetector gesture={composedGesture}>
+        <View style={st.videoWrap}>
+          <TvPlayerView
+            ref={nativeViewRef}
+            style={st.video as any}
+            onReady={() => {
+              setIsLoading(false);
+              setIsBuffering(false);
+              setError(null);
+            }}
+            onError={(e) => {
+              const msg = e.nativeEvent.message || "Stream failed to load";
+              setIsLoading(false);
+              setIsBuffering(false);
+              setError(msg);
+              consecutiveErrorCountRef.current += 1;
+              // DRM errors are prefixed with "DRM_ERROR:" by the native layer.
+              // VLC cannot play DRM content either, so offering the VLC fallback
+              // is misleading. Suppress the dialog for DRM failures.
+              const isDrmError = msg.startsWith("DRM_ERROR:");
+              if (
+                consecutiveErrorCountRef.current >= 2 &&
+                activePlayerEngine === "exoplayer" &&
+                !isDrmError &&
+                !drm
+              ) {
+                setShowFallbackDialog(true);
+              }
+              onError?.(msg);
+            }}
+            onPlayingChange={(e) => setIsPlaying(e.nativeEvent.isPlaying)}
+            onBufferingChange={(e) => {
+              setIsBuffering(e.nativeEvent.isBuffering);
+              if (e.nativeEvent.isBuffering) setIsLoading(false);
+            }}
+            onBackgroundAudioChange={(e) => {
+              isBackgroundPlayingRef.current = e.nativeEvent.enabled;
+              setIsBackgroundPlaying(e.nativeEvent.enabled);
+            }}
+            onPositionChange={(e) => {
+              setPositionMs(e.nativeEvent.position);
+              setDurationMs(e.nativeEvent.duration);
+            }}
+            onTracksChange={(e) => {
+              setNativeAudioTracks(e.nativeEvent.audioTracks);
+              setNativeSubtitleTracks(e.nativeEvent.subtitleTracks);
+            }}
+            onPipModeChange={(e) => {
+              handlePipChange(e.nativeEvent.isInPiP);
+            }}
+            onEngineChange={(e) => {
+              const engine = e.nativeEvent.engine;
+              console.log(`Player engine changed to: ${engine}`);
+              consecutiveErrorCountRef.current = 0;
+            }}
+          />
+
+          {/* Loading / buffering spinner */}
+          {(isLoading || isBuffering) && !error ? (
+            <View style={st.centerOverlay} pointerEvents="none">
+              <ActivityIndicator size="large" color={theme.primary} />
+              <ThemedText type="small" style={st.loadingText}>
+                {isLoading ? "Loading stream…" : "Buffering…"}
+              </ThemedText>
+            </View>
+          ) : null}
+
+          {/* Error state */}
+          {error ? (
+            <View style={st.centerOverlay}>
+              <View style={st.errorBox}>
+                <Ionicons name="cloud-offline" size={52} color={theme.error} />
+                <ThemedText
+                  type="body"
+                  style={[st.errorText, { color: theme.error }]}
+                >
+                  {error}
+                </ThemedText>
+                <TVFocusablePressable
+                  onPress={() => {
+                    setError(null);
+                    setIsLoading(true);
+                    loadSource();
+                  }}
+                  baseStyle={[
+                    st.retryBtn,
+                    {
+                      borderColor: theme.primary,
+                      backgroundColor: theme.primary + "20",
+                    },
+                  ]}
+                  focusedStyle={{
+                    ...st.retryBtnFocused,
+                    backgroundColor: theme.primary + "50",
+                  }}
+                  hasTVPreferredFocus={isTV}
+                  accessibilityLabel="Retry"
+                >
+                  <Ionicons name="refresh" size={18} color={theme.primary} />
+                  <ThemedText
+                    type="small"
+                    style={{ color: theme.primary, marginLeft: 6 }}
+                  >
+                    Retry
+                  </ThemedText>
+                </TVFocusablePressable>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Seek flash */}
+          {seekFlash.visible ? (
+            <Animated.View
+              style={[
+                st.seekFlash,
+                seekFlash.dir === "backward"
+                  ? st.seekFlashLeft
+                  : st.seekFlashRight,
+                animSeekFlash,
+              ]}
+              pointerEvents="none"
+            >
+              <Ionicons
+                name={
+                  seekFlash.dir === "backward" ? "play-back" : "play-forward"
+                }
+                size={36}
+                color="#fff"
+              />
+              <ThemedText type="small" style={st.seekFlashText}>
+                {SEEK_MS / 1000}s
+              </ThemedText>
+            </Animated.View>
+          ) : null}
+
+          {/* Lock overlay */}
+          {isLocked ? (
+            <Animated.View style={[st.lockOverlay, animLock]}>
+              <View style={st.lockBox}>
+                <Ionicons name="lock-closed" size={28} color="#fff" />
+                <ThemedText type="body" style={{ color: "#fff", marginTop: 8 }}>
+                  Controls locked
+                </ThemedText>
+                <Pressable
+                  onPress={() => setIsLocked(false)}
+                  style={[st.unlockBtn, { borderColor: theme.primary }]}
+                  hitSlop={16}
+                >
+                  <ThemedText type="small" style={{ color: theme.primary }}>
+                    Tap to unlock
+                  </ThemedText>
+                </Pressable>
+              </View>
+            </Animated.View>
+          ) : null}
+        </View>
+      </GestureDetector>
+
+      {/* ── Controls overlay ────────────────────────────────────────── */}
+      {/* Not rendered in PiP mode — the tiny PiP window must show pure video. */}
+      {!isInPiP ? (
+        <Animated.View
+          style={[st.controlsOverlay, animControls]}
+          pointerEvents={showControls && !isLocked ? "box-none" : "none"}
+        >
+          {/* ── Top bar ─────────────────────────────────────────────── */}
+          <View
+            style={[
+              st.topBar,
+              {
+                paddingTop: insets.top + Spacing.sm,
+                paddingLeft: insets.left + Spacing.md,
+                paddingRight: insets.right + Spacing.md,
+              },
+            ]}
+          >
+            {/* Back */}
+            <View style={st.topLeft}>
+              {onBack ? (
+                <TVFocusablePressable
+                  onPress={() => {
+                    // Pause playback before navigating back if background play is disabled
+                    if (!backgroundPlay) {
+                      TvPlayerCommands.pause(tvPlayerRef);
+                    }
+                    onBack();
+                  }}
+                  baseStyle={st.iconBtn}
+                  focusedStyle={{
+                    ...st.iconBtnFocused,
+                    backgroundColor: theme.primary + "40",
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  hitSlop={16}
+                  accessibilityLabel="Back"
+                  viewRef={backBtnRef}
+                  nextFocusDown={nh.playPause}
+                  nextFocusRight={nh.recentBtn ?? nh.favoriteBtn}
+                >
+                  <Ionicons
+                    name="chevron-back"
+                    size={playerControls.icon + 4}
+                    color="#fff"
+                  />
+                </TVFocusablePressable>
+              ) : null}
+            </View>
+
+            {/* Title */}
+            <View style={st.topCenter}>
+              {title ? (
+                <ThemedText
+                  type={isUltraWide ? "body" : "h4"}
+                  style={st.titleText}
+                  numberOfLines={1}
+                >
+                  {title}
+                </ThemedText>
+              ) : null}
+              {subtitle ? (
+                <ThemedText
+                  type="small"
+                  style={[st.subtitleText, { color: theme.textSecondary }]}
+                  numberOfLines={1}
+                >
+                  {subtitle}
+                </ThemedText>
+              ) : null}
+            </View>
+
+            {/* Top-right actions */}
+            <View style={st.topRight}>
+              {/* Recent channels */}
+              {recentChannels.length > 0 ? (
+                <TVFocusablePressable
+                  onPress={() => setShowRecentPanel((p) => !p)}
+                  baseStyle={st.iconBtn}
+                  focusedStyle={{
+                    ...st.iconBtnFocused,
+                    backgroundColor: theme.primary + "40",
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  accessibilityLabel="Recent channels"
+                  viewRef={recentBtnRef}
+                  nextFocusDown={nh.playPause}
+                  nextFocusLeft={nh.backBtn}
+                  nextFocusRight={nh.favoriteBtn}
+                >
+                  <Ionicons
+                    name="list"
+                    size={playerControls.icon}
+                    color="#fff"
+                  />
+                </TVFocusablePressable>
+              ) : null}
+
+              {/* Favourite */}
+              {onFavoritePress ? (
+                <TVFocusablePressable
+                  onPress={onFavoritePress}
+                  baseStyle={[
+                    st.iconBtn,
+                    isFavorite && [
+                      st.iconBtnActive,
+                      {
+                        borderColor: theme.primary,
+                        backgroundColor: theme.primary + "20",
+                      },
+                    ],
+                  ]}
+                  focusedStyle={{
+                    ...st.iconBtnFocused,
+                    backgroundColor: theme.primary + "40",
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  accessibilityLabel={
+                    isFavorite ? "Remove favourite" : "Add favourite"
+                  }
+                  viewRef={favoriteBtnRef}
+                  nextFocusDown={nh.playPause}
+                  nextFocusLeft={nh.recentBtn ?? nh.backBtn}
+                >
+                  <Ionicons
+                    name={isFavorite ? "heart" : "heart-outline"}
+                    size={playerControls.icon}
+                    color={isFavorite ? theme.primary : "#fff"}
+                  />
+                </TVFocusablePressable>
+              ) : null}
+            </View>
+          </View>
+
+          {/* ── Center transport ─────────────────────────────────────── */}
+          <View style={st.centerRow}>
+            {/* Previous / seek-back */}
+            {onPrevious ? (
+              <TVFocusablePressable
+                onPress={() => navigateToChannel(onPrevious)}
+                baseStyle={[
+                  st.navBtn,
+                  {
+                    width: playerControls.nav,
+                    height: playerControls.nav,
+                    borderRadius: playerControls.nav / 2,
+                  },
+                ]}
+                focusedStyle={{
+                  ...st.navBtnFocused,
+                  borderColor: theme.primary,
+                }}
+                focusable={controlsFocusable}
+                hitSlop={12}
+                accessibilityLabel="Previous"
+                viewRef={prevBtnRef}
+                nextFocusRight={nh.playPause}
+                nextFocusUp={nh.backBtn}
+                nextFocusDown={nh.firstTool}
+              >
+                <Ionicons
+                  name="play-skip-back"
+                  size={playerControls.icon * 1.2}
+                  color="#fff"
+                />
+              </TVFocusablePressable>
+            ) : (
+              <TVFocusablePressable
+                onPress={() => handleSeek(-SEEK_MS)}
+                baseStyle={[
+                  st.navBtn,
+                  {
+                    width: playerControls.nav,
+                    height: playerControls.nav,
+                    borderRadius: playerControls.nav / 2,
+                  },
+                ]}
+                focusedStyle={{
+                  ...st.navBtnFocused,
+                  borderColor: theme.primary,
+                }}
+                focusable={controlsFocusable}
+                hitSlop={12}
+                accessibilityLabel="Seek back 10s"
+                viewRef={prevBtnRef}
+                nextFocusRight={nh.playPause}
+                nextFocusUp={nh.backBtn}
+                nextFocusDown={nh.firstTool}
+              >
+                <Ionicons
+                  name="play-back"
+                  size={playerControls.icon * 1.2}
+                  color="#fff"
+                />
+              </TVFocusablePressable>
+            )}
+
+            {/* Play / Pause — always preferred focus on TV when controls are visible */}
+            <TVFocusablePressable
+              onPress={handlePlayPause}
+              baseStyle={[
+                st.playBtn,
+                {
+                  width: playerControls.play,
+                  height: playerControls.play,
+                  borderRadius: playerControls.play / 2,
+                },
+                { backgroundColor: theme.primary },
+              ]}
+              focusedStyle={st.playBtnFocused}
+              focusable={controlsFocusable}
+              hasTVPreferredFocus={isTV && showControls}
+              accessibilityLabel={isPlaying ? "Pause" : "Play"}
+              viewRef={playPauseBtnRef}
+              nextFocusUp={nh.backBtn}
+              nextFocusDown={nh.seekBar ?? nh.firstTool}
+              nextFocusLeft={nh.prevBtn}
+              nextFocusRight={nh.nextBtn}
+            >
+              <Ionicons
+                name={isPlaying ? "pause" : "play"}
+                size={playerControls.icon * 1.8}
+                color="#fff"
+              />
+            </TVFocusablePressable>
+
+            {/* Next / seek-forward */}
+            {onNext ? (
+              <TVFocusablePressable
+                onPress={() => navigateToChannel(onNext)}
+                baseStyle={[
+                  st.navBtn,
+                  {
+                    width: playerControls.nav,
+                    height: playerControls.nav,
+                    borderRadius: playerControls.nav / 2,
+                  },
+                ]}
+                focusedStyle={{
+                  ...st.navBtnFocused,
+                  borderColor: theme.primary,
+                }}
+                focusable={controlsFocusable}
+                hitSlop={12}
+                accessibilityLabel="Next"
+                viewRef={nextBtnRef}
+                nextFocusLeft={nh.playPause}
+                nextFocusUp={nh.favoriteBtn ?? nh.recentBtn}
+                nextFocusDown={nh.firstTool}
+              >
+                <Ionicons
+                  name="play-skip-forward"
+                  size={playerControls.icon * 1.2}
+                  color="#fff"
+                />
+              </TVFocusablePressable>
+            ) : (
+              <TVFocusablePressable
+                onPress={() => handleSeek(SEEK_MS)}
+                baseStyle={[
+                  st.navBtn,
+                  {
+                    width: playerControls.nav,
+                    height: playerControls.nav,
+                    borderRadius: playerControls.nav / 2,
+                  },
+                ]}
+                focusedStyle={{
+                  ...st.navBtnFocused,
+                  borderColor: theme.primary,
+                }}
+                focusable={controlsFocusable}
+                hitSlop={12}
+                accessibilityLabel="Seek forward 10s"
+                viewRef={nextBtnRef}
+                nextFocusLeft={nh.playPause}
+                nextFocusUp={nh.favoriteBtn ?? nh.recentBtn}
+                nextFocusDown={nh.firstTool}
+              >
+                <Ionicons
+                  name="play-forward"
+                  size={playerControls.icon * 1.2}
+                  color="#fff"
+                />
+              </TVFocusablePressable>
+            )}
+          </View>
+
+          {/* ── Bottom bar ───────────────────────────────────────────── */}
+          <View
+            style={[
+              st.bottomBar,
+              {
+                paddingBottom: insets.bottom + Spacing.md,
+                paddingLeft: insets.left + Spacing.md,
+                paddingRight: insets.right + Spacing.md,
+              },
+            ]}
+          >
+            {/* Progress row — always shown.
+               LIVE: shows elapsed time + LIVE badge, no seek bar.
+               VOD:  shows position / duration with a tappable seek bar. */}
+            <View style={st.progressRow}>
+              <ThemedText
+                type="caption"
+                style={[
+                  st.timeText,
+                  seekDrag.active && [
+                    st.timeTextScrubbing,
+                    { color: theme.primary },
+                  ],
+                ]}
+              >
+                {formatTime(seekDrag.active ? seekDragPreviewMs! : positionMs)}
+              </ThemedText>
+              {durationMs <= 0 ? (
+                /* Unknown duration: non-interactive progress indicator */
+                <View style={st.seekBar} pointerEvents="none">
+                  <View style={st.seekBarTrack}>
+                    <View
+                      style={[
+                        st.seekBarFill,
+                        { width: "100%" },
+                        { backgroundColor: theme.primary },
+                      ]}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <>
+                  {/* YouTube-style seek bar:
+                     - Track height expands on touch (4→8px)
+                     - Thumb grows on touch (14→22px) with spring animation
+                     - Tooltip fades/slides in above the thumb
+                     - Playback pauses while scrubbing, resumes on release
+                     - Controls auto-hide timer paused during scrub */}
+                  {isTV ? (
+                    <Pressable
+                      ref={seekBarRef}
+                      style={[
+                        st.seekBar,
+                        seekBarFocused && [
+                          st.seekBarFocused,
+                          { borderColor: theme.primary },
+                        ],
+                      ]}
+                      focusable={controlsFocusable}
+                      accessible
+                      accessibilityRole="adjustable"
+                      accessibilityLabel={`Seek video, ${formatTime(positionMs)} of ${formatTime(durationMs)}`}
+                      accessibilityHint="Use left and right to scrub"
+                      accessibilityValue={{
+                        min: 0,
+                        max: 100,
+                        now: Math.round(progress * 100),
+                      }}
+                      onFocus={() => {
+                        setSeekBarFocused(true);
+                        seekBarFocusedRef.current = true;
+                      }}
+                      onBlur={() => {
+                        setSeekBarFocused(false);
+                        seekBarFocusedRef.current = false;
+                      }}
+                      nextFocusUp={nh.playPause ?? undefined}
+                      nextFocusDown={nh.firstTool ?? undefined}
+                      onLayout={onSeekBarLayout}
+                    >
+                      {/* Track — animates height on drag */}
+                      <Animated.View
+                        style={[
+                          st.seekBarTrack,
+                          seekBarFocused && st.seekBarTrackFocused,
+                          animSeekTrack,
+                        ]}
+                      >
+                        <View
+                          style={[
+                            st.seekBarFill,
+                            {
+                              width: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                            },
+                            { backgroundColor: theme.primary },
+                          ]}
+                        />
+                        {/* Thumb — animates size on drag */}
+                        <Animated.View
+                          style={[
+                            st.seekThumb,
+                            {
+                              left: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                            },
+                            { backgroundColor: theme.primary },
+                            seekBarFocused && st.seekThumbFocused,
+                            animSeekThumb,
+                          ]}
+                        />
+                      </Animated.View>
+                      {/* Tooltip — fades and slides in above thumb while dragging */}
+                      <Animated.View
+                        style={[
+                          st.seekTooltip,
+                          {
+                            left: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                          },
+                          animSeekTooltip,
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <ThemedText type="caption" style={st.seekTooltipText}>
+                          {formatTime(
+                            seekDrag.active ? seekDragPreviewMs! : positionMs,
+                          )}
+                        </ThemedText>
+                      </Animated.View>
+                    </Pressable>
+                  ) : (
+                    <GestureDetector gesture={seekBarPan}>
+                      <View
+                        ref={seekBarRef}
+                        style={[
+                          st.seekBar,
+                          seekBarFocused && st.seekBarFocused,
+                        ]}
+                        onLayout={onSeekBarLayout}
+                      >
+                        {/* Track — animates height on drag */}
+                        <Animated.View
+                          style={[
+                            st.seekBarTrack,
+                            seekBarFocused && st.seekBarTrackFocused,
+                            animSeekTrack,
+                          ]}
+                        >
+                          <View
+                            style={[
+                              st.seekBarFill,
+                              {
+                                width: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                              },
+                              { backgroundColor: theme.primary },
+                            ]}
+                          />
+                          {/* Thumb — animates size on drag */}
+                          <Animated.View
+                            style={[
+                              st.seekThumb,
+                              {
+                                left: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                              },
+                              { backgroundColor: theme.primary },
+                              seekBarFocused && st.seekThumbFocused,
+                              animSeekThumb,
+                            ]}
+                          />
+                        </Animated.View>
+                        {/* Tooltip — fades and slides in above thumb while dragging */}
+                        <Animated.View
+                          style={[
+                            st.seekTooltip,
+                            {
+                              left: `${(seekDrag.active ? seekDrag.progress : progress) * 100}%`,
+                            },
+                            animSeekTooltip,
+                          ]}
+                          pointerEvents="none"
+                        >
+                          <ThemedText type="caption" style={st.seekTooltipText}>
+                            {formatTime(
+                              seekDrag.active ? seekDragPreviewMs! : positionMs,
+                            )}
+                          </ThemedText>
+                        </Animated.View>
+                      </View>
+                    </GestureDetector>
+                  )}
+                </>
+              )}
+              <ThemedText type="caption" style={st.timeText}>
+                {effectiveIsLive ? "LIVE" : formatTime(durationMs)}
+              </ThemedText>
+            </View>
+
+            {/* Bottom controls row */}
+            <View style={st.bottomRow}>
+              {/* Left badges */}
+              <View style={st.badgeRow}>
+                {effectiveIsLive ? (
+                  <View
+                    style={[st.liveBadge, { backgroundColor: theme.error }]}
+                  >
+                    <View style={st.liveDot} />
+                    <ThemedText type="small" style={st.liveText}>
+                      LIVE
+                    </ThemedText>
+                  </View>
+                ) : null}
+                {drm ? (
+                  <View style={st.drmBadge}>
+                    <Ionicons
+                      name="shield-checkmark"
+                      size={12}
+                      color={theme.success}
+                    />
+                    <ThemedText
+                      type="caption"
+                      style={{ color: "#fff", marginLeft: 4 }}
+                    >
+                      DRM
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </View>
+
+              {/* Right tool buttons */}
+              <View style={st.bottomRight}>
+                {/* Settings */}
+                <TVFocusablePressable
+                  onPress={() => setShowSettingsModal(true)}
+                  baseStyle={st.toolBtn}
+                  focusedStyle={{
+                    ...st.toolBtnFocused,
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  accessibilityLabel="Settings"
+                  viewRef={settingsBtnRef}
+                  nextFocusUp={nh.seekBar ?? nh.playPause}
+                  nextFocusRight={nh.bgAudioBtn}
+                  onLayout={(e) => {
+                    updateNh("settingsBtn", e);
+                    updateNh("firstTool", e);
+                  }}
+                >
+                  <Ionicons name="settings-outline" size={20} color="#fff" />
+                </TVFocusablePressable>
+
+                {/* Background audio */}
+                <TVFocusablePressable
+                  onPress={handleBackgroundToggle}
+                  baseStyle={[
+                    st.toolBtn,
+                    isBackgroundPlaying && [
+                      st.toolBtnActive,
+                      {
+                        backgroundColor: theme.primary + "25",
+                        borderColor: theme.primary,
+                      },
+                    ],
+                  ]}
+                  focusedStyle={{
+                    ...st.toolBtnFocused,
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  accessibilityLabel={
+                    isBackgroundPlaying
+                      ? "Disable background audio"
+                      : "Enable background audio"
+                  }
+                  viewRef={bgAudioBtnRef}
+                  nextFocusUp={nh.seekBar ?? nh.playPause}
+                  nextFocusLeft={nh.settingsBtn}
+                  nextFocusRight={nh.aspectBtn}
+                >
+                  <Ionicons
+                    name={
+                      isBackgroundPlaying
+                        ? "musical-notes"
+                        : "musical-notes-outline"
+                    }
+                    size={20}
+                    color={isBackgroundPlaying ? theme.primary : "#fff"}
+                  />
+                </TVFocusablePressable>
+
+                {/* PiP — mobile only, ExoPlayer only, supported devices */}
+                {!isTV &&
+                Platform.OS === "android" &&
+                pipSupported &&
+                activePlayerEngine === "exoplayer" ? (
+                  <TVFocusablePressable
+                    onPress={handleEnterPip}
+                    baseStyle={st.toolBtn}
+                    focusedStyle={{
+                      ...st.toolBtnFocused,
+                      borderColor: theme.primary,
+                    }}
+                    focusable={controlsFocusable}
+                    accessibilityLabel="Picture in picture"
+                  >
+                    <Ionicons name="browsers-outline" size={20} color="#fff" />
+                  </TVFocusablePressable>
+                ) : null}
+
+                {/* Aspect ratio */}
+                <TVFocusablePressable
+                  onPress={() => {
+                    const currentIndex = CONTENT_FIT_OPTIONS.findIndex(
+                      (o) => o.value === contentFit,
+                    );
+                    const nextIndex =
+                      (currentIndex + 1) % CONTENT_FIT_OPTIONS.length;
+                    const next = CONTENT_FIT_OPTIONS[nextIndex];
+                    setContentFit(next.value);
+                    TvPlayerCommands.setResizeMode(tvPlayerRef, next.value);
+                  }}
+                  baseStyle={st.toolBtn}
+                  focusedStyle={{
+                    ...st.toolBtnFocused,
+                    borderColor: theme.primary,
+                  }}
+                  focusable={controlsFocusable}
+                  accessibilityLabel="Aspect ratio"
+                  viewRef={aspectBtnRef}
+                  nextFocusUp={nh.seekBar ?? nh.playPause}
+                  nextFocusLeft={nh.bgAudioBtn}
+                >
+                  <Ionicons name="scan-outline" size={20} color="#fff" />
+                </TVFocusablePressable>
+
+                {/* Rotate screen — phones/tablets only; TV is always landscape */}
+                {!isTV ? (
+                  <TVFocusablePressable
+                    onPress={handleRotate}
+                    baseStyle={st.toolBtn}
+                    focusedStyle={{
+                      ...st.toolBtnFocused,
+                      borderColor: theme.primary,
+                    }}
+                    focusable={controlsFocusable}
+                    accessibilityLabel={
+                      isPortrait ? "Rotate to landscape" : "Rotate to portrait"
+                    }
+                  >
+                    <Ionicons
+                      name={
+                        isPortrait
+                          ? "phone-landscape-outline"
+                          : "phone-portrait-outline"
+                      }
+                      size={20}
+                      color="#fff"
+                    />
+                  </TVFocusablePressable>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </Animated.View>
+      ) : null}
+
+      {/* ── Recent channels slide-panel ──────────────────────────── */}
+      <Animated.View
+        style={[
+          st.recentPanel,
+          animRecent,
+          { paddingTop: insets.top, paddingRight: insets.right },
+        ]}
+        pointerEvents={showRecentPanel ? "box-none" : "none"}
+      >
+        <View style={st.recentHeader}>
+          <ThemedText type="h4" style={{ color: "#fff" }}>
+            Recent
+          </ThemedText>
+          <TVFocusablePressable
+            onPress={() => setShowRecentPanel(false)}
+            baseStyle={st.iconBtn}
+            focusedStyle={st.iconBtnFocused}
+            hitSlop={16}
+            accessibilityLabel="Close recent channels"
+            hasTVPreferredFocus={isTV && showRecentPanel}
+            focusable={showRecentPanel}
+          >
+            <Ionicons name="close" size={22} color="#fff" />
+          </TVFocusablePressable>
+        </View>
+        <ScrollView>
+          {displayedRecent.map((ch) => (
+            <TVFocusablePressable
+              key={ch.id}
+              focusable={showRecentPanel}
+              onPress={() => {
+                navigateToChannel(() => onChannelSelect?.(ch.id));
+                setShowRecentPanel(false);
+              }}
+              baseStyle={st.recentItem}
+              focusedStyle={st.recentItemFocused}
+              accessibilityLabel={ch.name}
+            >
+              {ch.logo ? (
+                <Image
+                  source={{ uri: ch.logo }}
+                  style={st.recentLogo}
+                  contentFit="contain"
+                />
+              ) : (
+                <View style={[st.recentLogo, st.recentLogoPlaceholder]}>
+                  <Ionicons
+                    name="tv-outline"
+                    size={20}
+                    color={theme.textSecondary}
+                  />
+                </View>
+              )}
+              <View style={{ flex: 1, marginLeft: Spacing.sm }}>
+                <ThemedText
+                  type="body"
+                  style={{ color: "#fff" }}
+                  numberOfLines={1}
+                >
+                  {ch.name}
+                </ThemedText>
+                <ThemedText
+                  type="caption"
+                  style={{ color: theme.textSecondary }}
+                  numberOfLines={1}
+                >
+                  {ch.group}
+                </ThemedText>
+              </View>
+            </TVFocusablePressable>
+          ))}
+        </ScrollView>
+      </Animated.View>
+
+      {/* ── Stop background audio confirmation (TV only) ────────────── */}
+      <Modal
+        visible={showStopAudioModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowStopAudioModal(false)}
+      >
+        <View style={st.modalScrim}>
+          <View
+            style={[
+              st.modalSheet,
+              { maxWidth: 360 },
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <Ionicons
+              name="musical-notes"
+              size={36}
+              color={theme.primary}
+              style={{ alignSelf: "center", marginBottom: Spacing.md }}
+            />
+            <ThemedText type="h4" style={st.modalTitle}>
+              Audio playing in background
+            </ThemedText>
+            <ThemedText
+              type="body"
+              style={{
+                color: theme.textSecondary,
+                textAlign: "center",
+                marginBottom: Spacing.xl,
+              }}
+            >
+              Do you want to keep the audio playing after you leave?
+            </ThemedText>
+            <TVFocusablePressable
+              onPress={() => {
+                setShowStopAudioModal(false);
+                // Keep playing - don't pause, just navigate back
+                onBack?.();
+              }}
+              baseStyle={st.optionRow}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              hasTVPreferredFocus={isTV}
+              accessibilityLabel="Keep playing and go back"
+            >
+              <Ionicons
+                name="musical-notes-outline"
+                size={22}
+                color={theme.primary}
+                style={{ marginRight: Spacing.md }}
+              />
+              <ThemedText type="body" style={{ color: "#fff", flex: 1 }}>
+                Keep playing
+              </ThemedText>
+            </TVFocusablePressable>
+            <TVFocusablePressable
+              onPress={() => {
+                // Stop audio and go back.
+                // Do NOT call async native commands here — they create a
+                // threading race with onDetachedFromWindow(). The native
+                // cleanup in TvPlayerView handles stopping/releasing the
+                // player and disabling background audio.
+                setShowStopAudioModal(false);
+                onBack?.();
+              }}
+              baseStyle={st.optionRow}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              accessibilityLabel="Stop audio and go back"
+            >
+              <Ionicons
+                name="stop-circle-outline"
+                size={22}
+                color={theme.error}
+                style={{ marginRight: Spacing.md }}
+              />
+              <ThemedText type="body" style={{ color: theme.error, flex: 1 }}>
+                Stop audio
+              </ThemedText>
+            </TVFocusablePressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Fallback: switch to VLC dialog ──────────────────────────── */}
+      <Modal
+        visible={showFallbackDialog}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowFallbackDialog(false)}
+      >
+        <View style={st.modalScrim}>
+          <View
+            style={[
+              st.modalSheet,
+              { maxWidth: 360 },
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <Ionicons
+              name="warning"
+              size={36}
+              color={theme.error}
+              style={{ alignSelf: "center", marginBottom: Spacing.md }}
+            />
+            <ThemedText type="h4" style={st.modalTitle}>
+              Playback Error
+            </ThemedText>
+            <ThemedText
+              type="body"
+              style={{
+                color: theme.textSecondary,
+                textAlign: "center",
+                marginBottom: Spacing.xl,
+              }}
+            >
+              Playback failed repeatedly. Switch to VLC for better compatibility
+              with non-DRM streams?
+            </ThemedText>
+            <TVFocusablePressable
+              onPress={() => {
+                setShowFallbackDialog(false);
+                changePlayerEngine(
+                  activePlayerEngine === "vlc" ? "exoplayer" : "vlc",
+                );
+              }}
+              baseStyle={st.optionRow}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              hasTVPreferredFocus={isTV}
+              accessibilityLabel="Switch player engine and retry"
+            >
+              <Ionicons
+                name="play-circle-outline"
+                size={22}
+                color={theme.primary}
+                style={{ marginRight: Spacing.md }}
+              />
+              <ThemedText type="body" style={{ color: "#fff", flex: 1 }}>
+                Switch to {activePlayerEngine === "vlc" ? "ExoPlayer" : "VLC"}
+              </ThemedText>
+            </TVFocusablePressable>
+            <TVFocusablePressable
+              onPress={() => {
+                setShowFallbackDialog(false);
+              }}
+              baseStyle={st.optionRow}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              accessibilityLabel="Stay with ExoPlayer"
+            >
+              <Ionicons
+                name="close-circle-outline"
+                size={22}
+                color={theme.textSecondary}
+                style={{ marginRight: Spacing.md }}
+              />
+              <ThemedText
+                type="body"
+                style={{ color: theme.textSecondary, flex: 1 }}
+              >
+                Stay with ExoPlayer
+              </ThemedText>
+            </TVFocusablePressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Settings modal ──────────────────────────────────────────── */}
+      <Modal
+        visible={showSettingsModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSettingsModal(false)}
+      >
+        <Pressable
+          style={st.modalScrim}
+          onPress={() => setShowSettingsModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              st.modalSheet,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={st.modalTitle}>
+              Settings
+            </ThemedText>
+            {[
+              {
+                label: "Player",
+                value: activePlayerEngine === "vlc" ? "VLC" : "ExoPlayer",
+                icon: "play-circle-outline" as const,
+                onPress: () => {
+                  setShowSettingsModal(false);
+                  setShowPlayerEngineModal(true);
+                },
+                hidden: false,
+              },
+              {
+                label: "Quality",
+                value: selectedQuality,
+                icon: "layers-outline" as const,
+                onPress: () => {
+                  setShowSettingsModal(false);
+                  setShowQualityModal(true);
+                },
+                hidden: qualities.length === 0,
+              },
+              {
+                label: "Audio track",
+                value: selectedAudioTrack
+                  ? (audioTracks.find((t) => t.id === selectedAudioTrack)
+                      ?.label ?? "Custom")
+                  : "Default",
+                icon: "volume-medium-outline" as const,
+                onPress: () => {
+                  setShowSettingsModal(false);
+                  setShowAudioModal(true);
+                },
+                hidden: audioTracks.length === 0,
+              },
+              {
+                label: "Subtitles",
+                value:
+                  selectedSubtitleTrack !== null
+                    ? (subtitleTracks.find(
+                        (t) => t.id === selectedSubtitleTrack,
+                      )?.label ?? "On")
+                    : "Off",
+                icon: "text" as const,
+                onPress: () => {
+                  setShowSettingsModal(false);
+                  setShowSubtitleModal(true);
+                },
+                hidden: subtitleTracks.length === 0,
+              },
+            ]
+              .filter((item) => !item.hidden)
+              .map((item, idx) => (
+                <TVFocusablePressable
+                  key={item.label}
+                  onPress={item.onPress}
+                  baseStyle={st.settingsRow}
+                  focusedStyle={{
+                    ...st.settingsRowFocused,
+                    backgroundColor: theme.primary + "20",
+                  }}
+                  hasTVPreferredFocus={isTV && idx === 0}
+                >
+                  <Ionicons
+                    name={item.icon}
+                    size={22}
+                    color={theme.textSecondary}
+                    style={{ marginRight: Spacing.md }}
+                  />
+                  <ThemedText type="body" style={{ color: "#fff", flex: 1 }}>
+                    {item.label}
+                  </ThemedText>
+                  <ThemedText
+                    type="small"
+                    style={{ color: theme.textSecondary }}
+                  >
+                    {item.value}
+                  </ThemedText>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={theme.textSecondary}
+                    style={{ marginLeft: 4 }}
+                  />
+                </TVFocusablePressable>
+              ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ── Quality modal ────────────────────────────────────────────── */}
+      <Modal
+        visible={showQualityModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowQualityModal(false)}
+      >
+        <Pressable
+          style={st.modalScrim}
+          onPress={() => setShowQualityModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              st.modalSheet,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={st.modalTitle}>
+              Quality
+            </ThemedText>
+            <ScrollView
+              style={st.modalScrollArea}
+              showsVerticalScrollIndicator={true}
+              bounces={false}
+            >
+              <TVFocusablePressable
+                onPress={() => handleQualitySelect("auto")}
+                baseStyle={[
+                  st.optionRow,
+                  selectedQuality === "auto" && [
+                    st.optionRowActive,
+                    { backgroundColor: theme.primary + "18" },
+                  ],
+                ]}
+                focusedStyle={{
+                  ...st.optionRowFocused,
+                  backgroundColor: theme.primary + "30",
+                }}
+                hasTVPreferredFocus={isTV && selectedQuality === "auto"}
+              >
+                <ThemedText type="body" style={{ color: "#fff", flex: 1 }}>
+                  Auto
+                </ThemedText>
+                {selectedQuality === "auto" ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </TVFocusablePressable>
+              {qualities.map((q, idx) => (
+                <TVFocusablePressable
+                  key={q.label}
+                  onPress={() => handleQualitySelect(q)}
+                  baseStyle={[
+                    st.optionRow,
+                    selectedQuality === q.label && [
+                      st.optionRowActive,
+                      { backgroundColor: theme.primary + "18" },
+                    ],
+                  ]}
+                  focusedStyle={{
+                    ...st.optionRowFocused,
+                    backgroundColor: theme.primary + "30",
+                  }}
+                  hasTVPreferredFocus={
+                    isTV &&
+                    selectedQuality === q.label &&
+                    idx === 0 &&
+                    selectedQuality !== "auto"
+                  }
+                >
+                  <View style={{ flex: 1 }}>
+                    <ThemedText type="body" style={{ color: "#fff" }}>
+                      {q.label}
+                    </ThemedText>
+                    {q.bitrate ? (
+                      <ThemedText
+                        type="caption"
+                        style={{ color: theme.textSecondary }}
+                      >
+                        {q.bitrate >= 1_000_000
+                          ? `${(q.bitrate / 1_000_000).toFixed(1)} Mbps`
+                          : `${Math.round(q.bitrate / 1000)} kbps`}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                  {selectedQuality === q.label ? (
+                    <Ionicons
+                      name="checkmark"
+                      size={20}
+                      color={theme.primary}
+                    />
+                  ) : null}
+                </TVFocusablePressable>
+              ))}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ── Audio modal ──────────────────────────────────────────────── */}
+      <Modal
+        visible={showAudioModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAudioModal(false)}
+      >
+        <Pressable
+          style={st.modalScrim}
+          onPress={() => setShowAudioModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              st.modalSheet,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={st.modalTitle}>
+              Audio Track
+            </ThemedText>
+            {audioTracks.length === 0 ? (
+              <View style={st.emptyState}>
+                <Ionicons
+                  name="volume-mute-outline"
+                  size={32}
+                  color={theme.textSecondary}
+                />
+                <ThemedText
+                  type="small"
+                  style={{
+                    color: theme.textSecondary,
+                    marginTop: Spacing.sm,
+                  }}
+                >
+                  No additional audio tracks
+                </ThemedText>
+              </View>
+            ) : (
+              <ScrollView
+                style={st.modalScrollArea}
+                showsVerticalScrollIndicator={true}
+                bounces={false}
+              >
+                {audioTracks.map((track) => (
+                  <TVFocusablePressable
+                    key={track.id}
+                    onPress={() => {
+                      setSelectedAudioTrack(track.id);
+                      TvPlayerCommands.selectAudioTrack(
+                        tvPlayerRef,
+                        track.groupIndex,
+                        track.trackIndex,
+                      );
+                      setShowAudioModal(false);
+                    }}
+                    baseStyle={[
+                      st.optionRow,
+                      (selectedAudioTrack === track.id || track.isSelected) && [
+                        st.optionRowActive,
+                        { backgroundColor: theme.primary + "18" },
+                      ],
+                    ]}
+                    focusedStyle={{
+                      ...st.optionRowFocused,
+                      backgroundColor: theme.primary + "30",
+                    }}
+                    hasTVPreferredFocus={
+                      isTV &&
+                      (selectedAudioTrack === track.id ||
+                        (!selectedAudioTrack && track.isSelected))
+                    }
+                  >
+                    <View style={{ flex: 1 }}>
+                      <ThemedText type="body" style={{ color: "#fff" }}>
+                        {track.label}
+                      </ThemedText>
+                      {track.language ? (
+                        <ThemedText
+                          type="caption"
+                          style={{ color: theme.textSecondary }}
+                        >
+                          {track.language}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                    {selectedAudioTrack === track.id ||
+                    (!selectedAudioTrack && track.isSelected) ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color={theme.primary}
+                      />
+                    ) : null}
+                  </TVFocusablePressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ── Subtitle modal ───────────────────────────────────────────── */}
+      <Modal
+        visible={showSubtitleModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSubtitleModal(false)}
+      >
+        <Pressable
+          style={st.modalScrim}
+          onPress={() => setShowSubtitleModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              st.modalSheet,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={st.modalTitle}>
+              Subtitles
+            </ThemedText>
+            <ScrollView
+              style={st.modalScrollArea}
+              showsVerticalScrollIndicator={true}
+              bounces={false}
+            >
+              <TVFocusablePressable
+                onPress={() => {
+                  setSelectedSubtitleTrack(null);
+                  TvPlayerCommands.selectSubtitleTrack(tvPlayerRef, -1, 0);
+                  setShowSubtitleModal(false);
+                }}
+                baseStyle={[
+                  st.optionRow,
+                  selectedSubtitleTrack === null && [
+                    st.optionRowActive,
+                    { backgroundColor: theme.primary + "18" },
+                  ],
+                ]}
+                focusedStyle={{
+                  ...st.optionRowFocused,
+                  backgroundColor: theme.primary + "30",
+                }}
+                hasTVPreferredFocus={isTV && selectedSubtitleTrack === null}
+              >
+                <ThemedText type="body" style={{ color: "#fff", flex: 1 }}>
+                  Off
+                </ThemedText>
+                {selectedSubtitleTrack === null ? (
+                  <Ionicons name="checkmark" size={20} color={theme.primary} />
+                ) : null}
+              </TVFocusablePressable>
+              {subtitleTracks.map((track, idx) => (
+                <TVFocusablePressable
+                  key={track.id}
+                  onPress={() => {
+                    setSelectedSubtitleTrack(track.id);
+                    TvPlayerCommands.selectSubtitleTrack(
+                      tvPlayerRef,
+                      track.groupIndex,
+                      track.trackIndex,
+                    );
+                    setShowSubtitleModal(false);
+                  }}
+                  baseStyle={[
+                    st.optionRow,
+                    selectedSubtitleTrack === track.id && [
+                      st.optionRowActive,
+                      { backgroundColor: theme.primary + "18" },
+                    ],
+                  ]}
+                  focusedStyle={{
+                    ...st.optionRowFocused,
+                    backgroundColor: theme.primary + "30",
+                  }}
+                  hasTVPreferredFocus={
+                    isTV && selectedSubtitleTrack === track.id
+                  }
+                >
+                  <View style={{ flex: 1 }}>
+                    <ThemedText type="body" style={{ color: "#fff" }}>
+                      {track.label}
+                    </ThemedText>
+                    {track.language ? (
+                      <ThemedText
+                        type="caption"
+                        style={{ color: theme.textSecondary }}
+                      >
+                        {track.language}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                  {selectedSubtitleTrack === track.id ? (
+                    <Ionicons
+                      name="checkmark"
+                      size={20}
+                      color={theme.primary}
+                    />
+                  ) : null}
+                </TVFocusablePressable>
+              ))}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ── Player Engine modal ───────────────────────────────────────────── */}
+      <Modal
+        visible={showPlayerEngineModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPlayerEngineModal(false)}
+      >
+        <Pressable
+          style={st.modalScrim}
+          onPress={() => setShowPlayerEngineModal(false)}
+          focusable={!isTV}
+        >
+          <View
+            style={[
+              st.modalSheet,
+              { backgroundColor: theme.backgroundDefault },
+            ]}
+          >
+            <ThemedText type="h4" style={st.modalTitle}>
+              Player Engine
+            </ThemedText>
+            <ThemedText
+              type="caption"
+              style={{
+                color: theme.textSecondary,
+                textAlign: "center",
+                marginBottom: Spacing.md,
+              }}
+            >
+              Saved per-channel
+            </ThemedText>
+            <TVFocusablePressable
+              onPress={() => {
+                changePlayerEngine("exoplayer");
+                setShowPlayerEngineModal(false);
+              }}
+              baseStyle={[
+                st.optionRow,
+                activePlayerEngine === "exoplayer" && [
+                  st.optionRowActive,
+                  { backgroundColor: theme.primary + "18" },
+                ],
+              ]}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              hasTVPreferredFocus={isTV}
+              accessibilityLabel="Use ExoPlayer"
+            >
+              <View style={{ flex: 1 }}>
+                <ThemedText type="body" style={{ color: "#fff" }}>
+                  ExoPlayer (Media3)
+                </ThemedText>
+                <ThemedText
+                  type="caption"
+                  style={{ color: theme.textSecondary }}
+                >
+                  Default — best for most streams
+                </ThemedText>
+              </View>
+              {activePlayerEngine === "exoplayer" ? (
+                <Ionicons name="checkmark" size={20} color={theme.primary} />
+              ) : null}
+            </TVFocusablePressable>
+            <TVFocusablePressable
+              onPress={() => {
+                changePlayerEngine("vlc");
+                setShowPlayerEngineModal(false);
+              }}
+              baseStyle={[
+                st.optionRow,
+                activePlayerEngine === "vlc" && [
+                  st.optionRowActive,
+                  { backgroundColor: theme.primary + "18" },
+                ],
+              ]}
+              focusedStyle={{
+                ...st.optionRowFocused,
+                backgroundColor: theme.primary + "30",
+              }}
+              accessibilityLabel="Use VLC Player"
+            >
+              <View style={{ flex: 1 }}>
+                <ThemedText type="body" style={{ color: "#fff" }}>
+                  VLC Player
+                </ThemedText>
+                <ThemedText
+                  type="caption"
+                  style={{ color: theme.textSecondary }}
+                >
+                  Fallback — wider codec support
+                </ThemedText>
+              </View>
+              {activePlayerEngine === "vlc" ? (
+                <Ionicons name="checkmark" size={20} color={theme.primary} />
+              ) : null}
+            </TVFocusablePressable>
+          </View>
+        </Pressable>
+      </Modal>
+    </GestureHandlerRootView>
+  );
+});
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const st = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  videoWrap: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  video: {
+    ...StyleSheet.absoluteFillObject,
+  },
+
+  // Overlays
+  centerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.75)",
+    zIndex: 10,
+  },
+  loadingText: {
+    color: "#fff",
+    marginTop: Spacing.md,
+  },
+  errorBox: {
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.9)",
+    padding: Spacing.xl,
+    borderRadius: BorderRadius.lg,
+    maxWidth: 320,
+  },
+  errorText: {
+    textAlign: "center",
+    marginTop: Spacing.md,
+  },
+  retryBtn: {
+    marginTop: Spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 2,
+  },
+  retryBtnFocused: {
+    transform: [{ scale: 1.06 }],
+  },
+
+  // Seek flash
+  seekFlash: {
+    position: "absolute",
+    top: "35%",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.55)",
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    zIndex: 20,
+  },
+  seekFlashLeft: { left: "10%" },
+  seekFlashRight: { right: "10%" },
+  seekFlashText: { color: "#fff", marginTop: 4 },
+
+  // Lock
+  lockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.65)",
+    zIndex: 30,
+  },
+  lockBox: {
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.85)",
+    padding: Spacing.xl,
+    borderRadius: BorderRadius.md,
+  },
+  unlockBtn: {
+    marginTop: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 2,
+  },
+
+  // Controls overlay
+  controlsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "space-between",
+    backgroundColor: "rgba(0,0,0,0.38)",
+    zIndex: 15,
+  },
+
+  // Top bar
+  topBar: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingBottom: Spacing.sm,
+  },
+  topLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    minWidth: 48,
+  },
+  topCenter: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: Spacing.sm,
+    paddingTop: Spacing.xs,
+  },
+  topRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    minWidth: 48,
+    justifyContent: "flex-end",
+  },
+  titleText: {
+    color: "#fff",
+    textAlign: "center",
+  },
+  subtitleText: {
+    marginTop: 2,
+    textAlign: "center",
+  },
+
+  // Icon buttons
+  iconBtn: {
+    padding: Spacing.sm,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  iconBtnActive: {},
+  iconBtnFocused: {
+    transform: [{ scale: 1.1 }],
+  },
+
+  // Center transport
+  centerRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: Spacing["2xl"],
+  },
+  playBtn: {
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 3,
+    borderColor: "transparent",
+  },
+  playBtnFocused: {
+    borderColor: "#fff",
+    transform: [{ scale: 1.08 }],
+  },
+  navBtn: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  navBtnFocused: {
+    backgroundColor: "rgba(255,255,255,0.28)",
+    transform: [{ scale: 1.08 }],
+  },
+
+  // Bottom bar
+  bottomBar: {
+    paddingTop: Spacing.sm,
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.sm,
+  },
+  timeText: {
+    color: "#fff",
+    minWidth: 48,
+    textAlign: "center",
+  },
+  seekBar: {
+    flex: 1,
+    paddingVertical: 10,
+    marginHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  seekBarFocused: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  seekBarTrack: {
+    // Base height 4px; animated style overrides height when scrubbing
+    height: 4,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    borderRadius: 2,
+    overflow: "visible",
+  },
+  seekBarTrackFocused: {
+    height: 6,
+    backgroundColor: "rgba(255,255,255,0.45)",
+  },
+  seekBarFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  seekThumb: {
+    position: "absolute",
+    // Base dimensions — animated style overrides width/height/top/marginLeft
+    top: -5,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginLeft: -7,
+  },
+  seekThumbFocused: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    top: -7,
+    marginLeft: -10,
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  seekTooltip: {
+    position: "absolute",
+    bottom: "100%",
+    marginBottom: 10,
+    marginLeft: -28,
+    backgroundColor: "rgba(0,0,0,0.88)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: BorderRadius.sm,
+    minWidth: 56,
+    alignItems: "center",
+  },
+  seekTooltipText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  timeTextScrubbing: {},
+  bottomRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  liveBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: BorderRadius.xs,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#fff",
+    marginRight: 4,
+  },
+  liveText: {
+    color: "#fff",
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  drmBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: BorderRadius.xs,
+  },
+  bottomRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  toolBtn: {
+    padding: Spacing.sm,
+    borderRadius: BorderRadius.xs,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  toolBtnActive: {},
+  toolBtnFocused: {
+    backgroundColor: "rgba(255,255,255,0.28)",
+    transform: [{ scale: 1.12 }],
+  },
+
+  // Recent channels panel
+  recentPanel: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 280,
+    backgroundColor: "rgba(10,10,10,0.97)",
+    zIndex: 25,
+    borderLeftWidth: 1,
+    borderLeftColor: "rgba(255,255,255,0.08)",
+  },
+  recentHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+    marginTop: Spacing.md,
+  },
+  recentItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.05)",
+    borderWidth: 2,
+    borderColor: "transparent",
+    borderRadius: BorderRadius.xs,
+  },
+  recentItemFocused: {
+    backgroundColor: "rgba(255,255,255,0.07)",
+  },
+  recentLogo: {
+    width: 44,
+    height: 44,
+    borderRadius: BorderRadius.xs,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  recentLogoPlaceholder: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Modals
+  modalScrim: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalSheet: {
+    width: "85%",
+    maxWidth: 400,
+    maxHeight: "75%",
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+  },
+  modalTitle: {
+    color: "#fff",
+    marginBottom: Spacing.lg,
+    textAlign: "center",
+  },
+  settingsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
+    marginBottom: 2,
+  },
+  settingsRowFocused: {},
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.sm,
+    // borderWidth always reserved so focus colour change doesn't cause reflow
+    borderWidth: 2,
+    borderColor: "transparent",
+    marginBottom: 2,
+  },
+  optionRowActive: {},
+  optionRowFocused: {},
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: Spacing.xl,
+  },
+  modalScrollArea: {
+    flexGrow: 0,
+  },
+});
