@@ -4,7 +4,7 @@ import { SettingsRow } from "@/components/SettingsRow";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { usePinLock } from "@/context/PinLockContext";
 
-/** Settings rows for the channel lock (PIN asked every time a channel opens). */
+/** Settings rows for the category lock (PIN needed to show hidden categories again). */
 export function ChannelLockSettings() {
   const { settings, updateSettings } = usePlaylist();
   const { requestUnlock, requestNewPin } = usePinLock();
@@ -39,8 +39,8 @@ export function ChannelLockSettings() {
     <>
       <SettingsRow
         icon="lock-closed"
-        title="Channel Lock"
-        subtitle="Ask for a PIN every time a channel is opened"
+        title="Category Lock"
+        subtitle="Ask for a PIN before a hidden category can be shown again"
         isToggle
         toggleValue={enabled}
         onToggle={handleToggle}

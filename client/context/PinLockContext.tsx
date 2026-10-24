@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { Modal, View, StyleSheet, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 
 import { ThemedText } from "@/components/ThemedText";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";

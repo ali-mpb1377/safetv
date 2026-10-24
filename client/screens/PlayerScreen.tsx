@@ -12,7 +12,7 @@ const isTV = Platform.isTV;
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 
 import { ThemedText } from "@/components/ThemedText";
 import { useEpg } from "@/context/EpgContext";
@@ -22,7 +22,6 @@ import {
   DRMConfig,
 } from "@/components/AdvancedVideoPlayer";
 import { usePlaylist } from "@/context/PlaylistContext";
-import { usePinLock } from "@/context/PinLockContext";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
 import { extractDRMFromManifest } from "@/lib/manifest-drm-extractor";
@@ -79,11 +78,7 @@ export default function PlayerScreen() {
   const navigation = useNavigation<PlayerNavigationProp>();
   const route = useRoute<PlayerRouteProp>();
   const { theme } = useTheme();
-  const { channelId, pinOk } = route.params;
-  const { isLockActive, requestUnlock } = usePinLock();
-  // Channel lock: ask for the PIN every time a channel is opened. Zapping
-  // prev/next inside the player passes pinOk so it does not re-ask each time.
-  const [unlocked, setUnlocked] = useState(!isLockActive || pinOk === true);
+  const { channelId } = route.params;
 
   const {
     getChannelById,
@@ -160,23 +155,10 @@ export default function PlayerScreen() {
   }, [recentChannels, channelId, playlist, getChannelById]);
 
   useEffect(() => {
-    if (unlocked) return;
-    let cancelled = false;
-    requestUnlock("Enter PIN to watch").then((ok) => {
-      if (cancelled) return;
-      if (ok) setUnlocked(true);
-      else navigation.goBack();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [unlocked, requestUnlock, navigation]);
-
-  useEffect(() => {
-    if (channel && unlocked) {
+    if (channel) {
       addToRecent(channel.id);
     }
-  }, [channel, unlocked]);
+  }, [channel]);
 
   useEffect(() => {
     loadNavigationBarModule().then(() => {
@@ -217,7 +199,7 @@ export default function PlayerScreen() {
 
       const newChannel = playlist.channels[newIndex];
       if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      navigation.replace("Player", { channelId: newChannel.id, pinOk: true });
+      navigation.replace("Player", { channelId: newChannel.id });
     },
     [playlist, channelId, navigation],
   );
@@ -226,10 +208,7 @@ export default function PlayerScreen() {
     (selectedChannelId: string) => {
       if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       if (selectedChannelId === channelId) return;
-      navigation.replace("Player", {
-        channelId: selectedChannelId,
-        pinOk: true,
-      });
+      navigation.replace("Player", { channelId: selectedChannelId });
     },
     [channelId, navigation],
   );
@@ -282,14 +261,6 @@ export default function PlayerScreen() {
       ? channel.headers
       : undefined;
   }, [channel?.headers]);
-
-  if (!unlocked) {
-    return (
-      <View style={[styles.container, { width, height }]}>
-        <StatusBar hidden translucent backgroundColor="transparent" />
-      </View>
-    );
-  }
 
   if (!channel) {
     return (

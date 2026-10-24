@@ -14,7 +14,7 @@ import Animated, {
   withSpring,
   WithSpringConfig,
 } from "react-native-reanimated";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 
 import { ThemedText } from "@/components/ThemedText";
 import { useTheme } from "@/hooks/useTheme";

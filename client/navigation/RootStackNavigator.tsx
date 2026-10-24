@@ -15,7 +15,7 @@ import { NetworkStreamConfig } from "@/lib/storage";
 export type RootStackParamList = {
   Setup: { fromSettings?: boolean } | undefined;
   Main: undefined;
-  Player: { channelId: string; pinOk?: boolean };
+  Player: { channelId: string };
   NetworkStream: undefined;
   NetworkPlayer: { config: NetworkStreamConfig };
   Logs: undefined;

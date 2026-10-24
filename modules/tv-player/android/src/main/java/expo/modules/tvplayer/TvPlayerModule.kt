@@ -3,6 +3,7 @@ package expo.modules.tvplayer
 import androidx.media3.common.util.UnstableApi
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -15,6 +16,46 @@ class TvPlayerModule : Module() {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // Older devices (e.g. Android 7) and old IPTV servers sometimes only agree on
+    // legacy TLS settings. Used as a second attempt after an SSL failure.
+    private val compatFetchClient: OkHttpClient by lazy {
+        fetchClient.newBuilder()
+            .connectionSpecs(
+                listOf(
+                    ConnectionSpec.MODERN_TLS,
+                    ConnectionSpec.COMPATIBLE_TLS,
+                    ConnectionSpec.CLEARTEXT
+                )
+            )
+            .build()
+    }
+
+    private fun fetchOnce(client: OkHttpClient, url: String): Map<String, Any> {
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("User-Agent", BROWSER_UA)
+            .addHeader("Accept", "*/*")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                return mapOf(
+                    "success" to false,
+                    "error" to "HTTP ${response.code}",
+                    "content" to ""
+                )
+            }
+            val content = response.body?.string() ?: ""
+            return mapOf("success" to true, "error" to "", "content" to content)
+        }
+    }
+
+    private fun fetchError(e: Throwable): Map<String, Any> = mapOf(
+        "success" to false,
+        // Keep the exception type: it tells "no internet" from "certificate" etc.
+        "error" to "${e.javaClass.simpleName}: ${e.message ?: "unknown"}",
+        "content" to ""
+    )
+
     private val BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     override fun definition() = ModuleDefinition {
@@ -24,31 +65,15 @@ class TvPlayerModule : Module() {
         //   because React Native's fetch strips/overrides the User-Agent header.
         AsyncFunction("fetchPlaylist") { url: String ->
             try {
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("User-Agent", BROWSER_UA)
-                    .addHeader("Accept", "*/*")
-                    .build()
-                val response = fetchClient.newCall(request).execute()
-                if (!response.isSuccessful) {
-                    return@AsyncFunction mapOf(
-                        "success" to false,
-                        "error" to "HTTP ${response.code}",
-                        "content" to ""
-                    )
+                fetchOnce(fetchClient, url)
+            } catch (e: javax.net.ssl.SSLException) {
+                try {
+                    fetchOnce(compatFetchClient, url)
+                } catch (e2: Throwable) {
+                    fetchError(e2)
                 }
-                val content = response.body?.string() ?: ""
-                mapOf(
-                    "success" to true,
-                    "error" to "",
-                    "content" to content
-                )
-            } catch (e: Exception) {
-                mapOf(
-                    "success" to false,
-                    "error" to (e.message ?: "Unknown error"),
-                    "content" to ""
-                )
+            } catch (e: Throwable) {
+                fetchError(e)
             }
         }
 

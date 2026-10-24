@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 import Animated, {
   useAnimatedStyle,
   useSharedValue,

@@ -14,7 +14,7 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "@/navigation/RootStackNavigator";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 
 import { ThemedView } from "@/components/ThemedView";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";

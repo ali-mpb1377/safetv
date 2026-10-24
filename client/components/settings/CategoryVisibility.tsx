@@ -5,6 +5,7 @@ import { ThemedText } from "@/components/ThemedText";
 import { SettingsRow } from "@/components/SettingsRow";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { usePinLock } from "@/context/PinLockContext";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
 
@@ -23,7 +24,26 @@ export function CategoryVisibility() {
     setCategoryHidden,
     setAllCategoriesHidden,
   } = usePlaylist();
+  const { isLockActive, requestUnlock } = usePinLock();
   const [open, setOpen] = useState(false);
+
+  // Hiding is always free. With the lock on, showing a hidden category again
+  // needs the PIN.
+  const handleToggle = async (cat: string, visible: boolean) => {
+    if (visible && isLockActive) {
+      const ok = await requestUnlock("Enter PIN to show this category");
+      if (!ok) return;
+    }
+    await setCategoryHidden(cat, !visible);
+  };
+
+  const handleShowAll = async () => {
+    if (isLockActive && hiddenCategories.length > 0) {
+      const ok = await requestUnlock("Enter PIN to show all categories");
+      if (!ok) return;
+    }
+    await setAllCategoriesHidden(false);
+  };
 
   const counts = useMemo(() => {
     const map: Record<string, number> = {};
@@ -74,12 +94,14 @@ export function CategoryVisibility() {
               type="caption"
               style={{ color: theme.textSecondary, marginTop: 2 }}
             >
-              Turn a category off to hide it from the channels section.
+              {isLockActive
+                ? "Turn a category off to hide it. A PIN is needed to show it again."
+                : "Turn a category off to hide it from the channels section."}
             </ThemedText>
 
             <View style={styles.actions}>
               <TVFocusablePressable
-                onPress={() => setAllCategoriesHidden(false)}
+                onPress={handleShowAll}
                 hasTVPreferredFocus={isTV}
                 accessibilityLabel="Show all categories"
                 baseStyle={[
@@ -112,7 +134,7 @@ export function CategoryVisibility() {
                   subtitle={`${counts[cat] || 0} channels`}
                   isToggle
                   toggleValue={!hidden.has(cat)}
-                  onToggle={(value) => setCategoryHidden(cat, !value)}
+                  onToggle={(value) => handleToggle(cat, value)}
                 />
               ))}
             </ScrollView>

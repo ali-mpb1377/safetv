@@ -2,7 +2,7 @@ import React, { useState, useCallback } from "react";
 import { StyleSheet, View, Pressable, Platform, ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 
 import { ThemedText } from "@/components/ThemedText";
 import { useTheme } from "@/hooks/useTheme";

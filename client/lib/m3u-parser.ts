@@ -706,25 +706,40 @@ export async function fetchAndParsePlaylist(
   customName?: string,
 ): Promise<Playlist> {
   let content: string | null = null;
+  let nativeError = "";
 
   // Try native OkHttp fetch first (properly handles User-Agent on Android)
   try {
     const result = await fetchPlaylistNative(url);
     if (result.success) {
       content = result.content;
+    } else {
+      nativeError = result.error;
     }
-  } catch {
+  } catch (e: any) {
     // Native fetch unavailable, fall through to JS fetch
+    nativeError = e?.message || "";
   }
 
   // Fallback: JS fetch
   if (!content) {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": PRYSM_USER_AGENT,
-        Accept: "*/*",
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          "User-Agent": PRYSM_USER_AGENT,
+          Accept: "*/*",
+        },
+      });
+    } catch (e: any) {
+      // Both fetchers failed at the network level. Report the real reason
+      // (e.g. certificate / DNS / timeout) instead of a generic message.
+      const reason = nativeError || e?.message || "unknown error";
+      throw new Error(
+        `Network error: could not reach the server (${reason}). ` +
+          `Check the URL, the internet connection and the device date/time.`,
+      );
+    }
 
     if (!response.ok) {
       throw new Error(

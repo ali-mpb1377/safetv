@@ -66,9 +66,7 @@ function AppContent() {
   const { isDark, theme } = useThemeContext();
   const navigationRef = useNavigationContainerRef<RootStackParamList>();
 
-  // Orientation policy: TV stays landscape, player screens rotate freely so
-  // video can be watched in landscape, every other screen is portrait-locked —
-  // so backing out of the player returns the app to portrait.
+  // Orientation policy: TV stays landscape; phones and tablets rotate freely.
   const configureOrientation = useCallback(async () => {
     try {
       const isTV = Platform.isTV || Device.deviceType === Device.DeviceType.TV;
@@ -80,22 +78,17 @@ function AppContent() {
         return;
       }
 
+      // Phones and tablets rotate freely on every screen so all buttons stay
+      // reachable in landscape. A manual lock from the in-player rotate button
+      // wins while it is active.
       const state = navigationRef.getRootState();
       const routeName = state?.routes[state.index]?.name;
       const isPlayerRoute =
         routeName === "Player" || routeName === "NetworkPlayer";
-
-      if (isPlayerRoute) {
-        // A manual lock from the in-player rotate button wins — switching
-        // channels must not silently drop it.
-        if (!isManualOrientationLockActive()) {
-          await ScreenOrientation.unlockAsync();
-        }
-      } else {
-        setManualOrientationLock(false);
-        await ScreenOrientation.lockAsync(
-          ScreenOrientation.OrientationLock.PORTRAIT_UP,
-        );
+      // Leaving the player drops any manual rotate-lock set there.
+      if (!isPlayerRoute) setManualOrientationLock(false);
+      if (!isManualOrientationLockActive()) {
+        await ScreenOrientation.unlockAsync();
       }
     } catch (error) {
       console.log("Orientation lock not supported:", error);

@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ThemedText } from "@/components/ThemedText";
 import { BrandLogo } from "@/components/BrandLogo";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
-import { getDeviceMac } from "@/lib/deviceId";
+import { getDeviceId } from "@/lib/deviceId";
 import { BrandGradients } from "@/constants/theme";
 
 const isTV = Platform.isTV;
@@ -91,6 +91,8 @@ interface TileProps {
   variant: "big" | "wide";
   style?: object;
   preferred?: boolean;
+  /** Short screens (phone in landscape): smaller icon and label. */
+  compact?: boolean;
 }
 
 function Tile({
@@ -102,6 +104,7 @@ function Tile({
   variant,
   style,
   preferred,
+  compact,
 }: TileProps) {
   return (
     <TVFocusablePressable
@@ -115,16 +118,30 @@ function Tile({
       {variant === "big" ? (
         <View style={styles.bigContent}>
           <View style={styles.bigIconWrap}>
-            <Ionicons name={icon} size={64} color="rgba(255,255,255,0.92)" />
+            <Ionicons
+              name={icon}
+              size={compact ? 38 : 64}
+              color="rgba(255,255,255,0.92)"
+            />
           </View>
-          <ThemedText type="h4" style={styles.tileLabel}>
+          <ThemedText
+            type={compact ? "small" : "h4"}
+            style={styles.tileLabel}
+          >
             {label}
           </ThemedText>
         </View>
       ) : (
         <View style={styles.wideContent}>
-          <Ionicons name={icon} size={30} color="rgba(255,255,255,0.92)" />
-          <ThemedText type="h4" style={[styles.tileLabel, styles.wideLabel]}>
+          <Ionicons
+            name={icon}
+            size={compact ? 22 : 30}
+            color="rgba(255,255,255,0.92)"
+          />
+          <ThemedText
+            type={compact ? "small" : "h4"}
+            style={[styles.tileLabel, styles.wideLabel]}
+          >
             {label}
           </ThemedText>
         </View>
@@ -138,20 +155,26 @@ function RoundButton({
   color,
   label,
   onPress,
+  compact,
 }: {
   icon: IconName;
   color: string;
   label: string;
   onPress: () => void;
+  compact?: boolean;
 }) {
   return (
     <TVFocusablePressable
       onPress={onPress}
       accessibilityLabel={label}
-      baseStyle={[styles.roundBtn, { backgroundColor: color }]}
+      baseStyle={[
+        styles.roundBtn,
+        compact && styles.roundBtnCompact,
+        { backgroundColor: color },
+      ]}
       focusedStyle={styles.roundBtnFocused}
     >
-      <Ionicons name={icon} size={24} color="#FFFFFF" />
+      <Ionicons name={icon} size={compact ? 20 : 24} color="#FFFFFF" />
     </TVFocusablePressable>
   );
 }
@@ -171,9 +194,10 @@ export function HomeDashboard({
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
+  const compact = height < 460;
 
   const [now, setNow] = useState(() => new Date());
-  const [mac, setMac] = useState("");
+  const [deviceId, setDeviceId] = useState("");
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 15000);
@@ -182,8 +206,8 @@ export function HomeDashboard({
 
   useEffect(() => {
     let alive = true;
-    getDeviceMac().then((m) => {
-      if (alive) setMac(m);
+    getDeviceId().then((id) => {
+      if (alive) setDeviceId(id);
     });
     return () => {
       alive = false;
@@ -225,7 +249,7 @@ export function HomeDashboard({
         { paddingTop: Math.max(insets.top, 12), paddingHorizontal: 28 },
       ]}
     >
-      <BrandLogo size={landscape ? 44 : 38} />
+      <BrandLogo size={compact ? 32 : landscape ? 44 : 38} />
       <View style={styles.headerRight}>
         <View style={styles.dateBlock}>
           <View style={styles.dateText}>
@@ -237,24 +261,27 @@ export function HomeDashboard({
             </ThemedText>
           </View>
           <View style={styles.dateDivider} />
-          <ThemedText type="h2" style={styles.clock}>
+          <ThemedText type={compact ? "h3" : "h2"} style={styles.clock}>
             {clock}
           </ThemedText>
         </View>
         <View style={styles.roundRow}>
           <RoundButton
+            compact={compact}
             icon="star"
             color="#7C3AED"
             label="Favorites"
             onPress={onFavorites}
           />
           <RoundButton
+            compact={compact}
             icon="refresh"
             color="#2563EB"
             label="Refresh playlist"
             onPress={onRefresh}
           />
           <RoundButton
+            compact={compact}
             icon="settings"
             color="#EA580C"
             label="Settings"
@@ -265,14 +292,14 @@ export function HomeDashboard({
     </View>
   );
 
-  const macPanel = (
+  const idPanel = (
     <View style={styles.macPanel}>
-      <Ionicons name="git-network-outline" size={20} color="#9AA3C0" />
+      <Ionicons name="finger-print-outline" size={20} color="#9AA3C0" />
       <ThemedText type="caption" style={styles.macLabel}>
-        MAC
+        ID
       </ThemedText>
       <ThemedText type="h4" style={styles.macValue}>
-        {mac || "--:--:--:--:--:--"}
+        {deviceId || "----"}
       </ThemedText>
     </View>
   );
@@ -287,6 +314,7 @@ export function HomeDashboard({
           colors={BrandGradients.utility}
           onPress={onGuide}
           variant="wide"
+          compact={compact}
           style={styles.wideTile}
         />
       ) : null}
@@ -297,6 +325,7 @@ export function HomeDashboard({
         colors={BrandGradients.utility}
         onPress={onPlaylists}
         variant="wide"
+        compact={compact}
         style={styles.wideTile}
       />
     </>
@@ -325,7 +354,9 @@ export function HomeDashboard({
       {header}
 
       {landscape ? (
-        <View style={styles.landscapeBody}>
+        <View
+          style={[styles.landscapeBody, compact && styles.landscapeBodyCompact]}
+        >
           <View style={styles.landscapeGrid}>
             <Tile
               id="live"
@@ -334,6 +365,7 @@ export function HomeDashboard({
               colors={BrandGradients.live}
               onPress={onLiveTv}
               variant="big"
+              compact={compact}
               preferred
               style={styles.liveTile}
             />
@@ -346,6 +378,7 @@ export function HomeDashboard({
                   colors={BrandGradients.movies}
                   onPress={slotB.fn}
                   variant="big"
+                  compact={compact}
                   style={styles.topTile}
                 />
                 <Tile
@@ -355,6 +388,7 @@ export function HomeDashboard({
                   colors={BrandGradients.series}
                   onPress={slotC.fn}
                   variant="big"
+                  compact={compact}
                   style={styles.topTile}
                 />
               </View>
@@ -375,6 +409,7 @@ export function HomeDashboard({
             colors={BrandGradients.live}
             onPress={onLiveTv}
             variant="big"
+            compact={compact}
             preferred
             style={styles.livePortrait}
           />
@@ -386,6 +421,7 @@ export function HomeDashboard({
               colors={BrandGradients.movies}
               onPress={slotB.fn}
               variant="big"
+              compact={compact}
               style={styles.portraitTile}
             />
             <Tile
@@ -395,6 +431,7 @@ export function HomeDashboard({
               colors={BrandGradients.series}
               onPress={slotC.fn}
               variant="big"
+              compact={compact}
               style={styles.portraitTile}
             />
           </View>
@@ -409,7 +446,7 @@ export function HomeDashboard({
         ]}
         pointerEvents="none"
       >
-        {macPanel}
+        {idPanel}
       </View>
     </View>
   );
@@ -440,6 +477,7 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "transparent",
   },
+  roundBtnCompact: { width: 38, height: 38, borderRadius: 19 },
   roundBtnFocused: { borderColor: "#FFFFFF", transform: [{ scale: 1.08 }] },
 
   landscapeBody: {
@@ -448,6 +486,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingBottom: 56,
   },
+  landscapeBodyCompact: { paddingBottom: 40, paddingHorizontal: 20 },
   landscapeGrid: {
     flexDirection: "row",
     gap: 14,
@@ -457,7 +496,7 @@ const styles = StyleSheet.create({
   liveTile: { flex: 0.86 },
   rightCol: { flex: 2, gap: 14 },
   rightTop: { flex: 3.4, flexDirection: "row", gap: 14 },
-  rightBottom: { flex: 1, flexDirection: "row", gap: 14, minHeight: 64 },
+  rightBottom: { flex: 1, flexDirection: "row", gap: 14, minHeight: 48 },
   topTile: { flex: 1 },
   wideTile: { flex: 1 },
 

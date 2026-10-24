@@ -37,7 +37,7 @@ import {
   GestureDetector,
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
-import * as Haptics from "expo-haptics";
+import * as Haptics from "@/lib/haptics";
 import { useKeepAwake } from "expo-keep-awake";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

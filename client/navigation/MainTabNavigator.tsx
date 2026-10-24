@@ -4,7 +4,8 @@ import {
   StyleSheet,
   Pressable,
   Platform,
-  Dimensions,
+  useWindowDimensions,
+  ScrollView,
   findNodeHandle,
   ViewStyle,
   BackHandler,
@@ -245,7 +246,7 @@ export default function MainTabNavigator() {
   const favoritesRef = useRef<View>(null);
   const settingsRef = useRef<View>(null);
 
-  const { width, height } = Dimensions.get("window");
+  const { width, height } = useWindowDimensions();
   const isTVDevice =
     Platform.isTV || Device.deviceType === Device.DeviceType.TV;
   const isLandscape = width > height;
@@ -366,7 +367,11 @@ export default function MainTabNavigator() {
             ) : null}
           </View>
 
-          <View style={styles.sidebarNav}>
+          <ScrollView
+            style={styles.sidebarNav}
+            contentContainerStyle={styles.sidebarNavContent}
+            showsVerticalScrollIndicator={false}
+          >
             <SidebarItem
               icon="home-outline"
               iconActive="home"
@@ -410,7 +415,7 @@ export default function MainTabNavigator() {
               itemRef={settingsRef}
               nextFocusUp={favoritesRef}
             />
-          </View>
+          </ScrollView>
         </View>
 
         <View style={[styles.content, { paddingLeft: insets.left }]}>
@@ -505,6 +510,8 @@ const styles = StyleSheet.create({
   },
   sidebarNav: {
     flex: 1,
+  },
+  sidebarNavContent: {
     gap: Spacing.xs,
   },
   sidebarItem: {

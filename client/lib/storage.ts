@@ -115,9 +115,9 @@ export interface AppSettings {
   epgRefreshHours: number;
   /** UI mode: "auto" selects TV layout on TV devices, "tv" forces TV 3-column UI, "standard" uses mobile/tablet UI. */
   tvInterfaceMode: "auto" | "tv" | "standard";
-  /** Channel lock: when on, a PIN is required every time a channel is opened. */
+  /** Category lock: when on, a PIN is required to show a hidden category again. */
   channelLockEnabled: boolean;
-  /** 4-digit PIN for the channel lock (stored in app settings on-device). */
+  /** 4-digit PIN for the category lock (stored in app settings on-device). */
   channelLockPin: string;
   /** Categories hidden from the channels section, keyed by playlist id.
    *  Empty / missing = every category is visible (default). */
