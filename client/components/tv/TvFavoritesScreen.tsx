@@ -120,6 +120,9 @@ function FavoriteChannelCard({
           source={channel.logo ? { uri: channel.logo } : placeholderImage}
           style={styles.resultLogo}
           contentFit="contain"
+          recyclingKey={channel.id}
+          cachePolicy="memory-disk"
+          transition={0}
         />
       </View>
       <View style={styles.resultInfo}>

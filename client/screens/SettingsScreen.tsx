@@ -38,7 +38,6 @@ import { RootStackParamList } from "@/navigation/RootStackNavigator";
 import { Toast } from "@/components/Toast";
 import { ChannelLockSettings } from "@/components/settings/ChannelLockSettings";
 import { CategoryVisibility } from "@/components/settings/CategoryVisibility";
-import { isDynamicColorSupported } from "../../modules/dynamic-color/src";
 import {
   checkForUpdate,
   downloadApk,
@@ -50,20 +49,6 @@ import {
 import * as FileSystemLegacy from "expo-file-system/legacy";
 
 type SettingsNavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-const SEED_PRESETS: { name: string; value: string }[] = [
-  { name: "Teal", value: "#009688" },
-  { name: "Blue", value: "#2196F3" },
-  { name: "Indigo", value: "#3F51B5" },
-  { name: "Purple", value: "#9C27B0" },
-  { name: "Pink", value: "#E91E63" },
-  { name: "Red", value: "#F44336" },
-  { name: "Orange", value: "#FF9800" },
-  { name: "Yellow", value: "#FFC107" },
-  { name: "Green", value: "#4CAF50" },
-  { name: "Cyan", value: "#00BCD4" },
-  { name: "Brown", value: "#795548" },
-];
 
 function FocusableOption({
   onPress,
@@ -203,16 +188,10 @@ export default function SettingsScreen({
     theme,
     isDark,
     themeMode,
-    dynamicColors,
-    seedColor,
     setThemeMode,
-    setDynamicColors,
-    setSeedColor,
   } = useTheme();
   const { width } = useWindowDimensions();
   const { isUltraWide } = useResponsive();
-
-  const dynamicSupported = useMemo(() => isDynamicColorSupported(), []);
 
   const {
     playlist,
@@ -230,7 +209,6 @@ export default function SettingsScreen({
 
   const [showQualityModal, setShowQualityModal] = useState(false);
   const [showThemeModal, setShowThemeModal] = useState(false);
-  const [showSeedModal, setShowSeedModal] = useState(false);
   const [showAutoRefreshModal, setShowAutoRefreshModal] = useState(false);
   const [showTextSizeModal, setShowTextSizeModal] = useState(false);
   const [showPlayerEngineModal, setShowPlayerEngineModal] = useState(false);
@@ -453,17 +431,6 @@ export default function SettingsScreen({
     if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await setThemeMode(value);
     setShowThemeModal(false);
-  };
-
-  const handleToggleDynamicColors = (value: boolean) => {
-    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    void setDynamicColors(value);
-  };
-
-  const handleSeedSelect = async (color: string | null) => {
-    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await setSeedColor(color);
-    setShowSeedModal(false);
   };
 
   const handlePlaylistSelect = async (playlistId: string) => {
@@ -878,26 +845,6 @@ export default function SettingsScreen({
                 onPress={() => setShowTvModeModal(true)}
                 showChevron
               />
-              {dynamicSupported && (
-                <SettingsRow
-                  icon="color-palette-outline"
-                  title="Material You"
-                  subtitle="Match colors to your wallpaper or a custom seed"
-                  isToggle
-                  toggleValue={dynamicColors}
-                  onToggle={handleToggleDynamicColors}
-                />
-              )}
-              {dynamicSupported && dynamicColors && (
-                <SettingsRow
-                  icon="color-fill-outline"
-                  title="Seed Color"
-                  subtitle="Pick a base color for the dynamic theme"
-                  value={seedColor ? seedColor.toUpperCase() : "Wallpaper"}
-                  onPress={() => setShowSeedModal(true)}
-                  showChevron
-                />
-              )}
               <SettingsRow
                 icon="grid"
                 title="Show Categories"
@@ -1244,154 +1191,6 @@ export default function SettingsScreen({
                 <Ionicons name="checkmark" size={20} color={theme.primary} />
               ) : null}
             </FocusableOption>
-          </View>
-        </Pressable>
-      </Modal>
-
-      <Modal
-        visible={showSeedModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowSeedModal(false)}
-      >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowSeedModal(false)}
-          focusable={!isTV}
-        >
-          <View
-            style={[
-              styles.modalContent,
-              isTV && styles.modalContentTv,
-              { backgroundColor: theme.backgroundDefault },
-            ]}
-          >
-            <ThemedText type="h4" style={styles.modalTitle}>
-              Seed Color
-            </ThemedText>
-            {isTV ? (
-              /* TV: compact swatch grid — one D-pad row per 4 tiles instead of
-                 a long vertical list. */
-              <View style={styles.seedGrid}>
-                <TVFocusablePressable
-                  onPress={() => handleSeedSelect(null)}
-                  accessibilityLabel="Use wallpaper colors"
-                  hasTVPreferredFocus={isTV}
-                  baseStyle={[
-                    styles.seedTile,
-                    seedColor === null && [
-                      styles.seedTileSelected,
-                      { borderColor: theme.primary },
-                    ],
-                  ]}
-                  focusedStyle={[
-                    styles.seedTileFocused,
-                    { borderColor: theme.primary },
-                  ]}
-                >
-                  <Ionicons
-                    name="color-palette-outline"
-                    size={30}
-                    color={seedColor === null ? theme.primary : theme.text}
-                  />
-                  <ThemedText type="small" style={styles.seedTileLabel}>
-                    Wallpaper
-                  </ThemedText>
-                  {seedColor === null ? (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={18}
-                      color={theme.primary}
-                      style={styles.seedTileCheck}
-                    />
-                  ) : null}
-                </TVFocusablePressable>
-                {SEED_PRESETS.map((preset) => {
-                  const isSelected =
-                    seedColor?.toUpperCase() === preset.value.toUpperCase();
-                  return (
-                    <TVFocusablePressable
-                      key={preset.value}
-                      onPress={() => handleSeedSelect(preset.value)}
-                      accessibilityLabel={`${preset.name} seed color`}
-                      baseStyle={[
-                        styles.seedTile,
-                        isSelected && [
-                          styles.seedTileSelected,
-                          { borderColor: theme.primary },
-                        ],
-                      ]}
-                      focusedStyle={[
-                        styles.seedTileFocused,
-                        { borderColor: theme.primary },
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.seedSwatchTv,
-                          { backgroundColor: preset.value },
-                        ]}
-                      />
-                      <ThemedText type="small" style={styles.seedTileLabel}>
-                        {preset.name}
-                      </ThemedText>
-                      {isSelected ? (
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={18}
-                          color={theme.primary}
-                          style={styles.seedTileCheck}
-                        />
-                      ) : null}
-                    </TVFocusablePressable>
-                  );
-                })}
-              </View>
-            ) : (
-              <>
-                <FocusableOption
-                  onPress={() => handleSeedSelect(null)}
-                  isSelected={seedColor === null}
-                  accessibilityLabel="Use wallpaper colors"
-                  hasTVPreferredFocus={isTV}
-                >
-                  <View style={styles.themeOption}>
-                    <Ionicons
-                      name="color-palette-outline"
-                      size={20}
-                      color={theme.text}
-                    />
-                    <ThemedText type="body">Wallpaper (auto)</ThemedText>
-                  </View>
-                  {seedColor === null ? (
-                    <Ionicons name="checkmark" size={20} color={theme.primary} />
-                  ) : null}
-                </FocusableOption>
-                {SEED_PRESETS.map((preset) => (
-                  <FocusableOption
-                    key={preset.value}
-                    onPress={() => handleSeedSelect(preset.value)}
-                    isSelected={
-                      seedColor?.toUpperCase() === preset.value.toUpperCase()
-                    }
-                    accessibilityLabel={`${preset.name} seed color`}
-                  >
-                    <View style={styles.themeOption}>
-                      <View
-                        style={[
-                          styles.seedSwatch,
-                          { backgroundColor: preset.value },
-                        ]}
-                      />
-                      <ThemedText type="body">{preset.name}</ThemedText>
-                    </View>
-                    {seedColor?.toUpperCase() === preset.value.toUpperCase() ? (
-                      <Ionicons name="checkmark" size={20} color={theme.primary} />
-                    ) : null}
-                  </FocusableOption>
-                ))}
-              </>
-            )}
           </View>
         </Pressable>
       </Modal>

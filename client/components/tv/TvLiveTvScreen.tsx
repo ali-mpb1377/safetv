@@ -5,6 +5,7 @@ import {
   TextInput,
   Platform,
   ScrollView,
+  FlatList,
   type LayoutChangeEvent,
 } from "react-native";
 import { Image } from "expo-image";
@@ -24,6 +25,12 @@ import { MiniPreviewPlayer } from "@/components/MiniPreviewPlayer";
 import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
 
 const isTV = Platform.isTV;
+
+// Fixed channel-row height (card 62 + 7 margin). A fixed height lets the list
+// be virtualized: only the rows near the viewport exist, instead of one row +
+// one image per channel (thousands on big playlists), which froze the app and
+// starved the logo loader so only a couple of icons ever appeared.
+const ROW_HEIGHT = 69;
 const placeholderImage = require("../../../assets/images/placeholder-channel.png");
 
 interface TvLiveTvScreenProps {
@@ -174,16 +181,37 @@ export function TvLiveTvScreen({
 
   // Focus auto-scroll for the two vertical lists
   const categoryScroll = useFocusScroll<string>({ axis: "vertical" });
-  const channelScroll = useFocusScroll<string>({ axis: "vertical" });
+  const channelListRef = React.useRef<FlatList<Channel>>(null);
+  const channelOffsetRef = React.useRef(0);
+  const channelViewportRef = React.useRef(0);
+
+  // Keep the focused row in view (rows have a fixed height, so no measuring).
+  const scrollChannelIntoView = useCallback((index: number) => {
+    const viewport = channelViewportRef.current;
+    if (viewport <= 0) return;
+    const pad = 24;
+    const start = index * ROW_HEIGHT;
+    const end = start + ROW_HEIGHT;
+    const current = channelOffsetRef.current;
+    let target: number | null = null;
+    if (start < current + pad) target = start - pad;
+    else if (end > current + viewport - pad) target = end - viewport + pad;
+    if (target !== null) {
+      channelListRef.current?.scrollToOffset({
+        offset: Math.max(0, target),
+        animated: false,
+      });
+    }
+  }, []);
 
   // Channel focus handler (keep focused row in view + update banner)
   const handleChannelFocus = useCallback(
-    (ch: Channel) => {
+    (ch: Channel, index: number) => {
       setFocusedChannelId(ch.id);
       setSelectedChannelId(ch.id);
-      channelScroll.focusOn(ch.id);
+      scrollChannelIntoView(index);
     },
-    [channelScroll],
+    [scrollChannelIntoView],
   );
 
   const handleCategoryFocus = useCallback(
@@ -306,48 +334,54 @@ export function TvLiveTvScreen({
           placeholder="Search channels..."
         />
 
-        {/* Channels List */}
-        <ScrollView
-          ref={channelScroll.scrollRef}
+        {/* Channels List (virtualized) */}
+        <FlatList
+          ref={channelListRef}
           style={styles.channelScrollView}
+          data={filteredChannels}
+          keyExtractor={(ch) => ch.id}
+          extraData={`${selectedChannelId}|${focusedChannelId}`}
+          getItemLayout={(_, index) => ({
+            length: ROW_HEIGHT,
+            offset: ROW_HEIGHT * index,
+            index,
+          })}
+          initialNumToRender={14}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={60}
+          windowSize={5}
           showsVerticalScrollIndicator={false}
-          onLayout={channelScroll.onScrollViewLayout}
-          onScroll={channelScroll.onScroll}
-          scrollEventThrottle={16}
-        >
-          {filteredChannels.length === 0 ? (
+          onLayout={(e) => {
+            channelViewportRef.current = e.nativeEvent.layout.height;
+          }}
+          onScroll={(e) => {
+            channelOffsetRef.current = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={32}
+          ListEmptyComponent={
             <View style={styles.emptyChannelsContainer}>
               <ThemedText type="body" style={{ color: c.text50 }}>
                 No channels found
               </ThemedText>
             </View>
-          ) : (
-            filteredChannels.map((channel, index) => {
-              const isSelected = selectedChannelId === channel.id;
-              const isFocused = focusedChannelId === channel.id;
-              const channelEpg = epg.getNowNext(channel.id);
-              const nowTitle = channelEpg?.now?.title;
-
-              return (
-                <ChannelListItem
-                  key={channel.id}
-                  channel={channel}
-                  index={index + 1}
-                  nowTitle={nowTitle}
-                  isSelected={isSelected}
-                  isFocused={isFocused}
-                  hasTVPreferredFocus={isTV && index === 0}
-                  onLayoutItem={(e) =>
-                    channelScroll.registerItem(channel.id, e)
-                  }
-                  onFocus={() => handleChannelFocus(channel)}
-                  onPress={() => handleChannelPress(channel)}
-                  onLongPress={() => toggleFavorite(channel.id)}
-                />
-              );
-            })
-          )}
-        </ScrollView>
+          }
+          renderItem={({ item: channel, index }) => {
+            const channelEpg = epg.getNowNext(channel.id);
+            return (
+              <ChannelListItem
+                channel={channel}
+                index={index + 1}
+                nowTitle={channelEpg?.now?.title}
+                isSelected={selectedChannelId === channel.id}
+                isFocused={focusedChannelId === channel.id}
+                hasTVPreferredFocus={isTV && index === 0}
+                onFocus={() => handleChannelFocus(channel, index)}
+                onPress={() => handleChannelPress(channel)}
+                onLongPress={() => toggleFavorite(channel.id)}
+              />
+            );
+          }}
+        />
       </View>
 
       {/* ─── COLUMN 3: EPG PROGRAM BANNER ─── */}
@@ -503,7 +537,6 @@ function ChannelListItem({
   isSelected,
   isFocused,
   hasTVPreferredFocus,
-  onLayoutItem,
   onFocus,
   onPress,
   onLongPress,
@@ -514,7 +547,6 @@ function ChannelListItem({
   isSelected: boolean;
   isFocused: boolean;
   hasTVPreferredFocus?: boolean;
-  onLayoutItem: (e: LayoutChangeEvent) => void;
   onFocus: () => void;
   onPress: () => void;
   onLongPress: () => void;
@@ -528,7 +560,6 @@ function ChannelListItem({
     <TVFocusablePressable
       onPress={onPress}
       onLongPress={onLongPress}
-      onLayout={onLayoutItem}
       onFocusChange={(f) => {
         setInternalFocused(f);
         if (f) onFocus();
@@ -548,6 +579,9 @@ function ChannelListItem({
           style={styles.channelLogo}
           contentFit="contain"
           placeholder={placeholderImage}
+          recyclingKey={channel.id}
+          cachePolicy="memory-disk"
+          transition={0}
         />
       </View>
 
@@ -733,6 +767,7 @@ function createStyles(theme: typeof Colors.dark) {
       alignItems: "center",
       backgroundColor: c.panel,
       padding: 9,
+      height: ROW_HEIGHT - 7,
       marginBottom: 7,
     },
     channelCardSelected: {

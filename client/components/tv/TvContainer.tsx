@@ -15,7 +15,7 @@ import { TvTopNav, TvTabName } from "./TvTopNav";
 import { TvLiveTvScreen } from "./TvLiveTvScreen";
 import {
   HomeDashboard,
-  findMediaCategories,
+  findSeriesCategories,
 } from "@/components/home/HomeDashboard";
 import { TvSearchScreen } from "./TvSearchScreen";
 import { TvFavoritesScreen } from "./TvFavoritesScreen";
@@ -41,8 +41,8 @@ export function TvContainer() {
     setActiveTab(tab);
   }, []);
 
-  const media = useMemo(
-    () => findMediaCategories(playlist?.categories ?? []),
+  const hasSeries = useMemo(
+    () => findSeriesCategories(playlist?.categories ?? []).length > 0,
     [playlist],
   );
   const guideAvailable = settings.showEpg && Boolean(epg.effectiveUrl);
@@ -67,20 +67,11 @@ export function TvContainer() {
         return (
           <HomeDashboard
             onLiveTv={() => handleSelectTab("Live TV")}
-            onMovies={
-              media.movies.length > 0
-                ? () => handleSelectTab("Movies")
-                : undefined
-            }
-            onSeries={
-              media.series.length > 0
-                ? () => handleSelectTab("Series")
-                : undefined
-            }
+            onSeries={hasSeries ? () => handleSelectTab("Series") : undefined}
             onFavorites={() => handleSelectTab("Favorites")}
             onSearch={() => handleSelectTab("Search")}
             onGuide={() => handleSelectTab("Guide")}
-            onPlaylists={() =>
+            onAddPlaylist={() =>
               navigation.navigate("Setup", { fromSettings: true })
             }
             onSettings={() => handleSelectTab("Settings")}

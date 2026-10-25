@@ -8,6 +8,7 @@ import Svg, {
 } from "react-native-svg";
 
 import { ThemedText } from "@/components/ThemedText";
+import { useTheme } from "@/hooks/useTheme";
 
 interface BrandMarkProps {
   size?: number;
@@ -69,15 +70,17 @@ interface BrandLogoProps {
 
 /** Mark + "SafeTV" wordmark, used in headers. */
 export function BrandLogo({ size = 40, showName = true }: BrandLogoProps) {
+  const { theme, themeMode } = useTheme();
+  const accent = themeMode === "light" ? "#0E9F77" : "#52E0B0";
   return (
     <View style={styles.row}>
       <BrandMark size={size} />
       {showName ? (
         <ThemedText
           type="h3"
-          style={[styles.name, { fontSize: Math.round(size * 0.6) }]}
+          style={[styles.name, { fontSize: Math.round(size * 0.6), color: theme.text }]}
         >
-          Safe<ThemedText type="h3" style={[styles.name, styles.nameAccent, { fontSize: Math.round(size * 0.6) }]}>TV</ThemedText>
+          Safe<ThemedText type="h3" style={[styles.name, { fontSize: Math.round(size * 0.6), color: accent }]}>TV</ThemedText>
         </ThemedText>
       ) : null}
     </View>
@@ -86,6 +89,5 @@ export function BrandLogo({ size = 40, showName = true }: BrandLogoProps) {
 
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10 },
-  name: { fontWeight: "800", letterSpacing: -0.3, color: "#FFFFFF" },
-  nameAccent: { color: "#52E0B0" },
+  name: { fontWeight: "800", letterSpacing: -0.3 },
 });

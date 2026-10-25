@@ -43,7 +43,7 @@ export const Colors = {
   pitchblack: {
     text: "#FFFFFF",
     textSecondary: "#8A8F98",
-    buttonText: "#FFFFFF",
+    buttonText: "#0B0E1A",
     tabIconDefault: "#5B6068",
     tabIconSelected: primaryCyan,
     link: primaryCyan,

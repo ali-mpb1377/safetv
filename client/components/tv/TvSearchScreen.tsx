@@ -38,11 +38,19 @@ export function TvSearchScreen() {
   const results = useMemo(() => {
     if (!playlist || !searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase().trim();
-    return playlist.channels.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        (c.group && c.group.toLowerCase().includes(q)),
-    );
+    // Cap the result list: rendering thousands of rows (each with an image)
+    // is what makes weak TV boxes freeze. Typing more narrows the search.
+    const found: Channel[] = [];
+    for (const ch of playlist.channels) {
+      if (
+        ch.name.toLowerCase().includes(q) ||
+        (ch.group && ch.group.toLowerCase().includes(q))
+      ) {
+        found.push(ch);
+        if (found.length >= 80) break;
+      }
+    }
+    return found;
   }, [playlist, searchQuery]);
 
   return (
@@ -145,6 +153,9 @@ function ChannelResultCard({
           source={channel.logo ? { uri: channel.logo } : placeholderImage}
           style={styles.resultLogo}
           contentFit="contain"
+          recyclingKey={channel.id}
+          cachePolicy="memory-disk"
+          transition={0}
         />
       </View>
       <View style={styles.resultInfo}>

@@ -1044,9 +1044,12 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
   // ── Animations: panels ────────────────────────────────────────────────────
 
   useEffect(() => {
-    recentTranslateX.value = withSpring(showRecentPanel ? 0 : 280, {
-      damping: 20,
-    });
+    // The panel is only mounted while open, so it can never get stuck on
+    // screen. Start off-screen and slide in.
+    if (showRecentPanel) {
+      recentTranslateX.value = 280;
+      recentTranslateX.value = withTiming(0, { duration: 180 });
+    }
   }, [showRecentPanel, recentTranslateX]);
 
   useEffect(() => {
@@ -2096,6 +2099,7 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
       ) : null}
 
       {/* ── Recent channels slide-panel ──────────────────────────── */}
+      {showRecentPanel ? (
       <Animated.View
         style={[
           st.recentPanel,
@@ -2168,6 +2172,7 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
           ))}
         </ScrollView>
       </Animated.View>
+      ) : null}
 
       {/* ── Stop background audio confirmation (TV only) ────────────── */}
       <Modal

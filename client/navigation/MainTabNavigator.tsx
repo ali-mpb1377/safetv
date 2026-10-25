@@ -26,7 +26,7 @@ import { usePlaylist } from "@/context/PlaylistContext";
 import { useEpg } from "@/context/EpgContext";
 import {
   HomeDashboard,
-  findMediaCategories,
+  findSeriesCategories,
 } from "@/components/home/HomeDashboard";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 import { TvContainer } from "@/components/tv/TvContainer";
@@ -283,27 +283,22 @@ export default function MainTabNavigator() {
     setChannelsPreset((p) => ({ ...preset, nonce: p.nonce + 1 }));
     setCurrentScreen("Channels");
   };
-  const media = findMediaCategories(playlist?.categories ?? []);
+  const seriesCategories = findSeriesCategories(playlist?.categories ?? []);
   const guideAvailable = settings.showEpg && Boolean(epg.effectiveUrl);
 
   if (currentScreen === "Home") {
     return (
       <HomeDashboard
         onLiveTv={() => openChannels()}
-        onMovies={
-          media.movies.length > 0
-            ? () => openChannels({ category: media.movies[0] })
-            : undefined
-        }
         onSeries={
-          media.series.length > 0
-            ? () => openChannels({ category: media.series[0] })
+          seriesCategories.length > 0
+            ? () => openChannels({ category: seriesCategories[0] })
             : undefined
         }
         onFavorites={() => setCurrentScreen("Favorites")}
         onSearch={() => openChannels()}
         onGuide={() => openChannels({ guide: true })}
-        onPlaylists={() => navigation.navigate("Setup", { fromSettings: true })}
+        onAddPlaylist={() => navigation.navigate("Setup", { fromSettings: true })}
         onSettings={() => setCurrentScreen("Settings")}
         onRefresh={() => {
           refreshPlaylist();
