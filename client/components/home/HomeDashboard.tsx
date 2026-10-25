@@ -7,7 +7,13 @@ import {
   Modal,
   useWindowDimensions,
 } from "react-native";
-import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
+import Svg, {
+  Defs,
+  LinearGradient,
+  RadialGradient,
+  Stop,
+  Rect,
+} from "react-native-svg";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -75,6 +81,31 @@ function Gradient({ id, colors }: { id: string; colors: readonly string[] }) {
         </LinearGradient>
       </Defs>
       <Rect width="100%" height="100%" fill={`url(#${id})`} />
+    </Svg>
+  );
+}
+
+/** Soft purple / warm glows on the navy background (like the reference image). */
+function Backdrop() {
+  return (
+    <Svg
+      width="100%"
+      height="100%"
+      preserveAspectRatio="none"
+      style={StyleSheet.absoluteFill}
+    >
+      <Defs>
+        <RadialGradient id="glow-left" cx="0.04" cy="0.02" rx="0.65" ry="0.75">
+          <Stop offset="0" stopColor="#3B2A9A" stopOpacity="0.5" />
+          <Stop offset="1" stopColor="#3B2A9A" stopOpacity="0" />
+        </RadialGradient>
+        <RadialGradient id="glow-right" cx="0.97" cy="0.04" rx="0.5" ry="0.6">
+          <Stop offset="0" stopColor="#8A5A3A" stopOpacity="0.28" />
+          <Stop offset="1" stopColor="#8A5A3A" stopOpacity="0" />
+        </RadialGradient>
+      </Defs>
+      <Rect width="100%" height="100%" fill="url(#glow-left)" />
+      <Rect width="100%" height="100%" fill="url(#glow-right)" />
     </Svg>
   );
 }
@@ -260,7 +291,7 @@ export function HomeDashboard({
   showGuide = true,
 }: HomeDashboardProps) {
   const insets = useSafeAreaInsets();
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
   const compact = height < 460;
@@ -435,7 +466,18 @@ export function HomeDashboard({
   );
 
   return (
-    <View style={[styles.root, { backgroundColor: theme.backgroundRoot }]}>
+    <View
+      style={[
+        styles.root,
+        // Dark and Pitch Black both use the SafeTV navy here (not pure black).
+        { backgroundColor: isDark ? "#0B0E1A" : theme.backgroundRoot },
+      ]}
+    >
+      {isDark ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Backdrop />
+        </View>
+      ) : null}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         {SQUARES.map((q, i) => (
           <View

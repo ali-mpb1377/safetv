@@ -3,7 +3,7 @@
     "name": "SafeTV",
     "slug": "prysm",
     "version": "1.5.0",
-    "orientation": "default",
+    "orientation": "landscape",
     "icon": "./assets/images/icon.png",
     "scheme": "prysmplayer",
     "userInterfaceStyle": "automatic",
@@ -79,7 +79,7 @@
       [
         "expo-screen-orientation",
         {
-          "initialOrientation": "DEFAULT"
+          "initialOrientation": "LANDSCAPE"
         }
       ],
       "expo-font"

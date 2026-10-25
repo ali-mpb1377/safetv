@@ -141,7 +141,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   epgUserSet: false,
   epgUrlOverrides: {},
   epgRefreshHours: 12,
-  tvInterfaceMode: "auto",
+  tvInterfaceMode: "tv",
   channelLockEnabled: false,
   channelLockPin: "",
   hiddenCategoriesByPlaylist: {},

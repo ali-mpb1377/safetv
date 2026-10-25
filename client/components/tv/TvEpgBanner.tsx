@@ -65,6 +65,8 @@ export function TvEpgBanner({ channel, now, next }: TvEpgBannerProps) {
             style={styles.logo}
             contentFit="contain"
             placeholder={placeholderImage}
+            recyclingKey={channel.id}
+            transition={0}
           />
         </View>
         <View style={styles.headerText}>

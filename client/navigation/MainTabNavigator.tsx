@@ -253,9 +253,8 @@ export default function MainTabNavigator() {
   const useSidebar = isLandscape || isTVDevice;
   const compact = sidebarWidth < 90 || isExtraWide;
 
-  const isTvMode =
-    settings?.tvInterfaceMode === "tv" ||
-    (settings?.tvInterfaceMode !== "standard" && isTVDevice);
+  // The TV interface is the only layout (no per-device switch any more).
+  const isTvMode = true;
 
   const handleScreenChange = useCallback((screen: ScreenName) => {
     setCurrentScreen(screen);

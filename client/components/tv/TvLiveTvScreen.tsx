@@ -226,16 +226,20 @@ export function TvLiveTvScreen({
   const { previewChannel, onChannelPress } = useChannelPressFlow();
   const handleChannelPress = useCallback(
     (ch: Channel) => {
+      setSelectedChannelId(ch.id);
       onChannelPress(ch);
     },
     [onChannelPress],
   );
 
   // EPG details for the active banner channel
+  // The info card must always describe what the preview is playing; before
+  // anything is previewed it follows the focused/selected channel.
+  const bannerChannel = previewChannel ?? activeChannel;
   const activeEpg = useMemo(() => {
-    if (!activeChannel) return null;
-    return epg.getNowNext(activeChannel.id);
-  }, [activeChannel, epg]);
+    if (!bannerChannel) return null;
+    return epg.getNowNext(bannerChannel.id);
+  }, [bannerChannel, epg]);
 
   const providerName = playlist?.name || "Provider";
 
@@ -402,9 +406,9 @@ export function TvLiveTvScreen({
           hint="Press OK to preview, OK again for fullscreen"
         />
 
-        {activeChannel ? (
+        {bannerChannel ? (
           <TvEpgBanner
-            channel={activeChannel}
+            channel={bannerChannel}
             now={activeEpg?.now}
             next={activeEpg?.next}
           />

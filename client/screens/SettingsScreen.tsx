@@ -155,23 +155,9 @@ const PLAYER_ENGINE_OPTIONS = [
   },
 ];
 
-const TV_INTERFACE_OPTIONS = [
-  {
-    label: "Auto (TV Devices)",
-    value: "auto" as const,
-    desc: "Activates 3-column UI on TV devices",
-  },
-  {
-    label: "Always On (TV UI)",
-    value: "tv" as const,
-    desc: "Force SafeTV 3-column TV UI",
-  },
-  {
-    label: "Standard (Mobile/Tablet)",
-    value: "standard" as const,
-    desc: "Standard tabs and mobile layout",
-  },
-];
+// Update checking is hidden for now. Set to true to bring the row, the
+// background check and the update dialog back.
+const SHOW_UPDATE_CHECK = false;
 
 export default function SettingsScreen({
   embedded = false,
@@ -212,7 +198,6 @@ export default function SettingsScreen({
   const [showAutoRefreshModal, setShowAutoRefreshModal] = useState(false);
   const [showTextSizeModal, setShowTextSizeModal] = useState(false);
   const [showPlayerEngineModal, setShowPlayerEngineModal] = useState(false);
-  const [showTvModeModal, setShowTvModeModal] = useState(false);
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [showDeletePlaylistModal, setShowDeletePlaylistModal] = useState(false);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
@@ -253,7 +238,7 @@ export default function SettingsScreen({
   const useTwoColumns = isTV || width > 900;
 
   useEffect(() => {
-    if (isFdroid) return;
+    if (isFdroid || !SHOW_UPDATE_CHECK) return;
     const initializeUpdateCheck = async () => {
       const info = await checkForUpdate();
       if (info) {
@@ -606,19 +591,6 @@ export default function SettingsScreen({
     }
   };
 
-  const handleTvModeSelect = (mode: "auto" | "tv" | "standard") => {
-    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateSettings({ tvInterfaceMode: mode });
-    setShowTvModeModal(false);
-  };
-
-  const getTvModeLabel = () => {
-    const option = TV_INTERFACE_OPTIONS.find(
-      (o) => o.value === settings.tvInterfaceMode,
-    );
-    return option?.label || "Auto (TV Devices)";
-  };
-
   const getActivePlaylistName = () => {
     const active = playlists.find((p) => p.id === activePlaylistId);
     return active?.name || "None";
@@ -838,14 +810,6 @@ export default function SettingsScreen({
                 showChevron
               />
               <SettingsRow
-                icon="tv"
-                title="TV Interface"
-                subtitle="3-column layout with preview and top navigation"
-                value={getTvModeLabel()}
-                onPress={() => setShowTvModeModal(true)}
-                showChevron
-              />
-              <SettingsRow
                 icon="grid"
                 title="Show Categories"
                 subtitle="Display category filter on channels screen"
@@ -933,7 +897,8 @@ export default function SettingsScreen({
                 }
                 showChevron
               />
-              {!isFdroid &&
+              {SHOW_UPDATE_CHECK &&
+                !isFdroid &&
                 (updateInfo?.available ? (
                   <SettingsRow
                     icon="download"
@@ -960,52 +925,6 @@ export default function SettingsScreen({
           </View>
         </View>
       </ScrollView>
-
-      <Modal
-        visible={showTvModeModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowTvModeModal(false)}
-      >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowTvModeModal(false)}
-          focusable={!isTV}
-        >
-          <View
-            style={[
-              styles.modalContent,
-              { backgroundColor: theme.backgroundDefault },
-            ]}
-          >
-            <ThemedText type="h4" style={styles.modalTitle}>
-              TV Interface Layout
-            </ThemedText>
-            {TV_INTERFACE_OPTIONS.map((option, idx) => (
-              <FocusableOption
-                key={option.value}
-                onPress={() => handleTvModeSelect(option.value)}
-                isSelected={settings.tvInterfaceMode === option.value}
-                accessibilityLabel={option.label}
-                hasTVPreferredFocus={isTV && idx === 0}
-              >
-                <View style={{ flex: 1 }}>
-                  <ThemedText type="body">{option.label}</ThemedText>
-                  <ThemedText
-                    type="caption"
-                    style={{ color: theme.textSecondary }}
-                  >
-                    {option.desc}
-                  </ThemedText>
-                </View>
-                {settings.tvInterfaceMode === option.value ? (
-                  <Ionicons name="checkmark" size={20} color={theme.primary} />
-                ) : null}
-              </FocusableOption>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
 
       <Modal
         visible={showQualityModal}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from "react";
-import { StyleSheet, View, ActivityIndicator, Platform } from "react-native";
+import { StyleSheet, View, ActivityIndicator } from "react-native";
 import {
   NavigationContainer,
   DarkTheme,
@@ -13,7 +13,6 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import * as ScreenOrientation from "expo-screen-orientation";
-import * as Device from "expo-device";
 import {
   useFonts,
   Rubik_400Regular,
@@ -33,10 +32,6 @@ import { ThemeProvider, useThemeContext } from "@/context/ThemeContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LogCapture } from "@/components/LogCapture";
 import { Colors } from "@/constants/theme";
-import {
-  isManualOrientationLockActive,
-  setManualOrientationLock,
-} from "@/lib/orientation";
 import { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 // Deep link config — handles prysmplayer://play?channelId=<id> from the
@@ -66,34 +61,17 @@ function AppContent() {
   const { isDark, theme } = useThemeContext();
   const navigationRef = useNavigationContainerRef<RootStackParamList>();
 
-  // Orientation policy: TV stays landscape; phones and tablets rotate freely.
+  // Orientation policy: landscape only on every device. The screen still
+  // rotates between the two landscape directions but never goes portrait.
   const configureOrientation = useCallback(async () => {
     try {
-      const isTV = Platform.isTV || Device.deviceType === Device.DeviceType.TV;
-
-      if (isTV) {
-        await ScreenOrientation.lockAsync(
-          ScreenOrientation.OrientationLock.LANDSCAPE,
-        );
-        return;
-      }
-
-      // Phones and tablets rotate freely on every screen so all buttons stay
-      // reachable in landscape. A manual lock from the in-player rotate button
-      // wins while it is active.
-      const state = navigationRef.getRootState();
-      const routeName = state?.routes[state.index]?.name;
-      const isPlayerRoute =
-        routeName === "Player" || routeName === "NetworkPlayer";
-      // Leaving the player drops any manual rotate-lock set there.
-      if (!isPlayerRoute) setManualOrientationLock(false);
-      if (!isManualOrientationLockActive()) {
-        await ScreenOrientation.unlockAsync();
-      }
+      await ScreenOrientation.lockAsync(
+        ScreenOrientation.OrientationLock.LANDSCAPE,
+      );
     } catch (error) {
       console.log("Orientation lock not supported:", error);
     }
-  }, [navigationRef]);
+  }, []);
 
   const navigationTheme = isDark
     ? {

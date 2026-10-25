@@ -2067,8 +2067,8 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
                   <Ionicons name="scan-outline" size={20} color="#fff" />
                 </TVFocusablePressable>
 
-                {/* Rotate screen — phones/tablets only; TV is always landscape */}
-                {!isTV ? (
+                {/* Rotate-to-portrait button removed: the app is landscape only */}
+                {false && !isTV ? (
                   <TVFocusablePressable
                     onPress={handleRotate}
                     baseStyle={st.toolBtn}
