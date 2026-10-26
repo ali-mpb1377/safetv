@@ -24,10 +24,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
-          df -h /
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -48,8 +44,13 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - name: Clean npm cache
+        run: |
+          npm cache clean --force
+          rm -rf /home/runner/.npm/_cacache/tmp/*
+
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install
