@@ -1,58 +1,13 @@
 Categories:
   - Multimedia
 License: MIT
-AuthorName: dereferencex
-SourceCode: https://github.com/dereferencex/prysm
-IssueTracker: https://github.com/dereferencex/prysm/issues
-Changelog: https://github.com/dereferencex/prysm/releases
-Donate: https://github.com/sponsors/dereferencex
+AuthorName: ali-mpb1377
+SourceCode: https://github.com/ali-mpb1377/safetv
+IssueTracker: https://github.com/ali-mpb1377/safetv/issues
+Changelog: https://github.com/ali-mpb1377/safetv/releases
 
 RepoType: git
-Repo: https://github.com/dereferencex/prysm
+Repo: https://github.com/ali-mpb1377/safetv
 
-Binaries: ~
-
-Builds:
-  - versionName: 1.5.0
-    versionCode: 10500
-    commit: fbd59a7f57711b4fbef216e5d48331d922fd8d83
-    sudo:
-      - apt-get update
-      - apt-get install -y nodejs npm
-    init:
-      - npm ci
-      - PRYSM_FDROID=1 npx expo prebuild --no-install
-    subdir: android
-    gradle: yes
-    output: app/build/outputs/apk/release/app-release.apk
-    scanignore:
-      - node_modules
-
-AutoUpdateMode: Version
-UpdateCheckMode: Tags
-UpdateCheckData: app.json|"versionCode":\s*(\d+)|app.json|"version":\s*"([^"]+)"
-CurrentVersion: 1.5.0
-CurrentVersionCode: 10500
-
-MaintainerNotes: |
-  STATUS: ready — prepared for release v1.5.0 (versionCode 10500): navigation-driven
-  orientation (portrait restored on leaving the player) and an in-player rotate
-  control. Builds.commit still points at fbd59a7 (v1.4.2) — repoint it at the
-  v1.5.0 release commit when tagging. Build from that commit with the recipe below.
-
-  Build recipe: npm ci installs FLOSS JS deps from npm; PRYSM_FDROID=1 makes
-  app.config.js strip REQUEST_INSTALL_PACKAGES and set extra.isFdroid, which
-  hides the in-app self-updater so updates come via the F-Droid client.
-  npx expo prebuild generates the android/ project from source at build time.
-
-  scanignore: node_modules holds FLOSS JS deps resolved from npm at build
-  time. Native deps (androidx.media3, org.videolan.android:libvlc-all,
-  com.squareup.okhttp3:okhttp, Hermes engine) come from Maven Central /
-  Google Maven and are all FLOSS.
-
-  usesCleartextTraffic=true is required because the app plays user-supplied
-  IPTV streams over http://; expected for a media player.
-
-  If Node.js from Debian stable is too old for Expo SDK 54, install a newer
-  Node via nvm/nodesource in the sudo block. If the build emits per-ABI APKs
-  (ABI splits) instead of a universal APK, add VercodeOperation entries.
+# Builds: add an entry here with a commit from this repository before
+# submitting to F-Droid (the old entry pointed to the upstream Prysm commit).

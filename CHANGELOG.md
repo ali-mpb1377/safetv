@@ -1,7 +1,55 @@
 ﻿# Changelog
 
-All notable changes to Prysm are documented here.
+All notable changes to SafeTV are documented here.
+SafeTV is a fork of [Prysm](https://github.com/dereferencex/prysm) by dereferencex;
+entries before 1.6.0 are the upstream Prysm history.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [SemVer](https://semver.org/).
+
+---
+
+## [1.6.0] — 2026-10-26
+
+First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
+
+### Added
+- **SafeTV branding** — new name, shield-and-play logo, app icon, adaptive icon,
+  Android TV banner and splash screen.
+- **New home screen** — navy dashboard with the SafeTV logo, date and clock, and
+  gradient tiles: Live TV, Favorites, Series (or Search), EPG Catch-up,
+  Add Playlist and Settings. Account button (placeholder for future account
+  details) and refresh button in the header.
+- **Device ID** shown on the home screen (derived from the Android ID, kept
+  across restarts) — intended for server-side subscription control later.
+- **Live TV preview** — small live monitor next to the channel list. Press a
+  channel once to preview it, press it again for fullscreen.
+- **Category visibility** — Settings → Visible Categories: categories are
+  detected from the playlist; turn any off to hide it everywhere.
+- **Category Lock** — optional 4-digit PIN; with the lock on, showing a hidden
+  category again needs the PIN.
+
+### Changed
+- **Landscape only** on every device (phones included); the screen still rotates
+  between the two landscape directions.
+- **TV interface is always used**; the interface-mode option was removed from
+  Settings.
+- **Fixed themes** — Light, Dark and Pitch Black only; Material You and seed
+  colors removed. Phone and TV share the same palette.
+- Default player engine is now **VLC**; default auto-refresh is **every day**
+  (applies to fresh installs).
+- Vibration feedback removed.
+- "Check for updates" hidden in Settings for now (`SHOW_UPDATE_CHECK` flag).
+- Release APKs are published as `safetv-<version>-<abi>.apk`.
+
+### Fixed
+- TV: channel list froze the app and logos/names did not appear on large
+  playlists — only the rows near the screen are rendered now.
+- TV: the info card kept showing the first channel; it now follows the channel
+  being previewed.
+- TV: the "Recent channels" panel in the player could get stuck in the middle
+  of the screen.
+- Adding a playlist on older devices (e.g. Android 7) now retries with
+  compatible TLS settings and shows the real network error.
+- Search on TV limited to the first 80 matches to avoid freezes.
 
 ---
 
@@ -67,6 +115,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.6.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.6.0
 [1.5.0]: https://github.com/dereferencex/prysm/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/dereferencex/prysm/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/dereferencex/prysm/compare/v1.4.0...v1.4.1

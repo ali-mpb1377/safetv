@@ -890,10 +890,10 @@ export default function SettingsScreen({
               <SettingsRow
                 icon="code-slash"
                 title="Developer"
-                subtitle="dereferencex"
+                subtitle="ali-mpb1377"
                 value=""
                 onPress={() =>
-                  Linking.openURL("https://github.com/dereferencex")
+                  Linking.openURL("https://github.com/ali-mpb1377")
                 }
                 showChevron
               />

@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
+# "write" is needed to publish the GitHub Release when a v* tag is pushed.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -45,10 +48,59 @@ jobs:
         working-directory: android
         run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
 
+      # One APK per CPU type (arm64-v8a, armeabi-v7a, x86, x86_64) plus a
+      # universal one, named safetv-<version>-<abi>.apk.
+      - name: Rename APKs
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p renamed-apks
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+            case "$base" in
+              *arm64-v8a*)   name="safetv-${VERSION}-arm64-v8a.apk" ;;
+              *armeabi-v7a*) name="safetv-${VERSION}-armeabi-v7a.apk" ;;
+              *x86_64*)      name="safetv-${VERSION}-x86_64.apk" ;;
+              *x86*)         name="safetv-${VERSION}-x86.apk" ;;
+              *universal*)   name="safetv-${VERSION}-universal.apk" ;;
+              *)             name="safetv-${VERSION}.apk" ;;
+            esac
+            cp "$apk" "renamed-apks/$name"
+          done
+          echo "APKs:" | tee -a "$GITHUB_STEP_SUMMARY"
+          ls -1 renamed-apks | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SafeTV-APK
-          path: android/app/build/outputs/apk/**/*.apk
+          path: renamed-apks/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      # Release notes = the "## [x.y.z]" section of CHANGELOG.md for this tag.
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              h = $0
+              sub(/^## \[/, "", h)
+              sub(/\].*/, "", h)
+              if (h == ver) { found = 1 }
+            }
+            found { print }
+          ' CHANGELOG.md > "$NOTES"
+          if ! [ -s "$NOTES" ]; then
+            cp CHANGELOG.md "$NOTES"
+          fi
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SafeTV ${{ github.ref_name }}
+          files: renamed-apks/*.apk
+          body_path: ${{ runner.temp }}/release-notes.md

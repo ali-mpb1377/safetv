@@ -5,7 +5,6 @@ import {
   TextInput,
   Platform,
   ScrollView,
-  FlatList,
   type LayoutChangeEvent,
 } from "react-native";
 import { Image } from "expo-image";
@@ -26,11 +25,15 @@ import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
 
 const isTV = Platform.isTV;
 
-// Fixed channel-row height (card 62 + 7 margin). A fixed height lets the list
-// be virtualized: only the rows near the viewport exist, instead of one row +
-// one image per channel (thousands on big playlists), which froze the app and
-// starved the logo loader so only a couple of icons ever appeared.
+// Fixed channel-row height (card 62 + 7 margin). With a fixed height only the
+// rows near the viewport are rendered (see the windowing in the channel list),
+// instead of one row + one image per channel, which froze the app on big
+// playlists. A plain ScrollView is used (not FlatList) because it keeps the
+// native D-pad focus scrolling that works on real TV boxes.
 const ROW_HEIGHT = 69;
+const WINDOW_ROWS = 40; // rows rendered at once
+const WINDOW_BUFFER = 12; // rows kept above the viewport
+const WINDOW_STEP = 6; // re-window only every few rows (fewer re-renders)
 const placeholderImage = require("../../../assets/images/placeholder-channel.png");
 
 interface TvLiveTvScreenProps {
@@ -181,9 +184,10 @@ export function TvLiveTvScreen({
 
   // Focus auto-scroll for the two vertical lists
   const categoryScroll = useFocusScroll<string>({ axis: "vertical" });
-  const channelListRef = React.useRef<FlatList<Channel>>(null);
+  const channelListRef = React.useRef<ScrollView>(null);
   const channelOffsetRef = React.useRef(0);
   const channelViewportRef = React.useRef(0);
+  const [windowStart, setWindowStart] = useState(0);
 
   // Keep the focused row in view (rows have a fixed height, so no measuring).
   const scrollChannelIntoView = useCallback((index: number) => {
@@ -197,12 +201,32 @@ export function TvLiveTvScreen({
     if (start < current + pad) target = start - pad;
     else if (end > current + viewport - pad) target = end - viewport + pad;
     if (target !== null) {
-      channelListRef.current?.scrollToOffset({
-        offset: Math.max(0, target),
+      channelListRef.current?.scrollTo({
+        y: Math.max(0, target),
         animated: false,
       });
     }
   }, []);
+
+  const handleChannelScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      const y = e.nativeEvent.contentOffset.y;
+      channelOffsetRef.current = y;
+      const firstVisible = Math.floor(y / ROW_HEIGHT);
+      const snapped =
+        Math.floor(Math.max(0, firstVisible - WINDOW_BUFFER) / WINDOW_STEP) *
+        WINDOW_STEP;
+      setWindowStart((prev) => (prev === snapped ? prev : snapped));
+    },
+    [],
+  );
+
+  // A different category / search result starts again from the top.
+  useEffect(() => {
+    channelOffsetRef.current = 0;
+    setWindowStart(0);
+    channelListRef.current?.scrollTo({ y: 0, animated: false });
+  }, [filteredChannels]);
 
   // Channel focus handler (keep focused row in view + update banner)
   const handleChannelFocus = useCallback(
@@ -338,54 +362,55 @@ export function TvLiveTvScreen({
           placeholder="Search channels..."
         />
 
-        {/* Channels List (virtualized) */}
-        <FlatList
+        {/* Channels List (windowed: only nearby rows are rendered) */}
+        <ScrollView
           ref={channelListRef}
           style={styles.channelScrollView}
-          data={filteredChannels}
-          keyExtractor={(ch) => ch.id}
-          extraData={`${selectedChannelId}|${focusedChannelId}`}
-          getItemLayout={(_, index) => ({
-            length: ROW_HEIGHT,
-            offset: ROW_HEIGHT * index,
-            index,
-          })}
-          initialNumToRender={14}
-          maxToRenderPerBatch={8}
-          updateCellsBatchingPeriod={60}
-          windowSize={5}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={50}
           onLayout={(e) => {
             channelViewportRef.current = e.nativeEvent.layout.height;
           }}
-          onScroll={(e) => {
-            channelOffsetRef.current = e.nativeEvent.contentOffset.y;
-          }}
-          scrollEventThrottle={32}
-          ListEmptyComponent={
+          onScroll={handleChannelScroll}
+        >
+          {filteredChannels.length === 0 ? (
             <View style={styles.emptyChannelsContainer}>
               <ThemedText type="body" style={{ color: c.text50 }}>
                 No channels found
               </ThemedText>
             </View>
-          }
-          renderItem={({ item: channel, index }) => {
-            const channelEpg = epg.getNowNext(channel.id);
-            return (
-              <ChannelListItem
-                channel={channel}
-                index={index + 1}
-                nowTitle={channelEpg?.now?.title}
-                isSelected={selectedChannelId === channel.id}
-                isFocused={focusedChannelId === channel.id}
-                hasTVPreferredFocus={isTV && index === 0}
-                onFocus={() => handleChannelFocus(channel, index)}
-                onPress={() => handleChannelPress(channel)}
-                onLongPress={() => toggleFavorite(channel.id)}
-              />
-            );
-          }}
-        />
+          ) : (
+            (() => {
+              const total = filteredChannels.length;
+              const start = Math.min(windowStart, Math.max(0, total - 1));
+              const end = Math.min(total, start + WINDOW_ROWS);
+              return (
+                <>
+                  <View style={{ height: start * ROW_HEIGHT }} />
+                  {filteredChannels.slice(start, end).map((channel, i) => {
+                    const index = start + i;
+                    const channelEpg = epg.getNowNext(channel.id);
+                    return (
+                      <ChannelListItem
+                        key={channel.id}
+                        channel={channel}
+                        index={index + 1}
+                        nowTitle={channelEpg?.now?.title}
+                        isSelected={selectedChannelId === channel.id}
+                        isFocused={focusedChannelId === channel.id}
+                        hasTVPreferredFocus={isTV && index === 0}
+                        onFocus={() => handleChannelFocus(channel, index)}
+                        onPress={() => handleChannelPress(channel)}
+                        onLongPress={() => toggleFavorite(channel.id)}
+                      />
+                    );
+                  })}
+                  <View style={{ height: (total - end) * ROW_HEIGHT }} />
+                </>
+              );
+            })()
+          )}
+        </ScrollView>
       </View>
 
       {/* ─── COLUMN 3: EPG PROGRAM BANNER ─── */}
