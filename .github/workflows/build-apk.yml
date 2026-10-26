@@ -19,6 +19,11 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -64,7 +69,7 @@ jobs:
               *universal*)   name="safetv-${VERSION}-universal.apk" ;;
               *)             name="safetv-${VERSION}.apk" ;;
             esac
-            cp "$apk" "renamed-apks/$name"
+            mv "$apk" "renamed-apks/$name"
           done
           echo "APKs:" | tee -a "$GITHUB_STEP_SUMMARY"
           ls -1 renamed-apks | tee -a "$GITHUB_STEP_SUMMARY"
