@@ -9,7 +9,7 @@ export const BASE_URL = "https://it.web-gaming.ir";
 const SERVER_HOST = "it.web-gaming.ir";
 const REQUEST_TIMEOUT_MS = 20000;
 
-export const APP_VERSION = "1.7.0";
+export const APP_VERSION = "1.7.1";
 
 export type AccountStatus = "active" | "expired" | "suspended";
 
@@ -229,10 +229,11 @@ export function buildStreamHeaders(
 ): Record<string, string> | undefined {
   if (channel.viaServer) {
     if (!token) return undefined;
-    let host = "";
-    try {
-      host = new URL(channel.url).hostname;
-    } catch {}
+    // Plain regex instead of `new URL()`: React Native's URL class can throw
+    // on `.hostname`, which would silently drop the token and make every
+    // server stream fail with 401/403.
+    const match = /^https?:\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(channel.url);
+    const host = match ? match[1].toLowerCase() : "";
     // Safety net: never send the token to another host.
     if (host !== SERVER_HOST) return undefined;
     return { Authorization: `Bearer ${token}` };

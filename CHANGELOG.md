@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.7.1] — 2026-10-28
+
+### Fixed
+- Streams served by the account server did not play: the account token was
+  not attached because the host could not be read from the stream address.
+
+---
+
 ## [1.7.0] — 2026-10-27
 
 SafeTV now works with an account instead of playlists.
@@ -152,6 +160,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.7.1]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.1
 [1.7.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.6.0
 [1.5.0]: https://github.com/dereferencex/prysm/compare/v1.4.2...v1.5.0
