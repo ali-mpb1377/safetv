@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.7.2] — 2026-10-28
+
+### Fixed
+- Playback errors now show the real reason (HTTP status, SSL or network
+  problem) instead of just "Source error".
+
+---
+
 ## [1.7.1] — 2026-10-28
 
 ### Fixed
@@ -160,6 +168,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.7.2]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.2
 [1.7.1]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.1
 [1.7.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.6.0

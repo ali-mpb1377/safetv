@@ -1004,7 +1004,25 @@ class ExoPlayerController(
                     "DRM_ERROR: DRM session could not be opened (${error.errorCodeName})$levelSuffix"
                 PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED ->
                     "DRM_ERROR: Device has been revoked by the DRM system (${error.errorCodeName})$levelSuffix"
-                else -> error.message ?: "Unknown playback error (${error.errorCodeName})"
+                else -> {
+                    // ExoPlayer's own message is just "Source error"; the
+                    // useful part (HTTP status, SSL / DNS problem) is in the
+                    // cause chain, so put it in the text.
+                    val http = generateSequence(error.cause) { it.cause }
+                        .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                        .firstOrNull()
+                    val root = generateSequence(error as Throwable) { it.cause }.last()
+                    val detail = if (http != null) {
+                        "HTTP ${http.responseCode}"
+                    } else if (root !== error) {
+                        "${root.javaClass.simpleName}: ${root.message ?: "no message"}"
+                    } else {
+                        null
+                    }
+                    val base = error.message ?: "Playback error"
+                    if (detail != null) "$base (${error.errorCodeName}) - $detail"
+                    else "$base (${error.errorCodeName})"
+                }
             }
             callbacks?.onError(message)
         }
