@@ -13,8 +13,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Device from "expo-device";
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { useFocusEffect } from "@react-navigation/native";
 
 import ChannelsScreen from "@/screens/ChannelsScreen";
 import FavoritesScreen from "@/screens/FavoritesScreen";
@@ -24,11 +23,11 @@ import { useResponsive } from "@/hooks/useResponsive";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useEpg } from "@/context/EpgContext";
+import { useAccount } from "@/context/AccountContext";
 import {
   HomeDashboard,
   findSeriesCategories,
 } from "@/components/home/HomeDashboard";
-import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 import { TvContainer } from "@/components/tv/TvContainer";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 
@@ -232,10 +231,9 @@ export default function MainTabNavigator() {
   const insets = useSafeAreaInsets();
   const { sidebarWidth, isExtraWide } = useResponsive();
   const { theme } = useTheme();
-  const { settings, playlist, refreshPlaylist } = usePlaylist();
+  const { settings, playlist } = usePlaylist();
+  const { refreshChannels } = useAccount();
   const epg = useEpg();
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>("Home");
   const [channelsPreset, setChannelsPreset] = useState<ChannelsPreset>({
     nonce: 0,
@@ -297,10 +295,9 @@ export default function MainTabNavigator() {
         onFavorites={() => setCurrentScreen("Favorites")}
         onSearch={() => openChannels()}
         onGuide={() => openChannels({ guide: true })}
-        onAddPlaylist={() => navigation.navigate("Setup", { fromSettings: true })}
         onSettings={() => setCurrentScreen("Settings")}
         onRefresh={() => {
-          refreshPlaylist();
+          refreshChannels();
         }}
         showGuide={guideAvailable}
       />

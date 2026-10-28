@@ -22,6 +22,7 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { useTheme } from "@/hooks/useTheme";
 import { getDeviceId } from "@/lib/deviceId";
+import { useAccount } from "@/context/AccountContext";
 import { BrandGradients, withAlpha } from "@/constants/theme";
 
 const isTV = Platform.isTV;
@@ -34,8 +35,6 @@ export interface HomeDashboardProps {
   onFavorites: () => void;
   onSearch: () => void;
   onGuide: () => void;
-  /** "Add Playlist" tile. */
-  onAddPlaylist: () => void;
   onSettings: () => void;
   onRefresh: () => void;
   /** Hide the Guide tile when there is no EPG available. */
@@ -210,7 +209,17 @@ function RoundButton({
   );
 }
 
-/** Placeholder for the account / subscription details (filled in later). */
+function formatDate(unix: number | null | undefined): string {
+  if (!unix) return "نامحدود";
+  const d = new Date(unix * 1000);
+  try {
+    return d.toLocaleDateString("fa-IR");
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+/** Account section: subscription details of the logged-in account. */
 function AccountModal({
   visible,
   deviceId,
@@ -221,6 +230,34 @@ function AccountModal({
   onClose: () => void;
 }) {
   const { theme } = useTheme();
+  const { account, logout } = useAccount();
+
+  const rows: { label: string; value: string }[] = account
+    ? [
+        { label: "نام", value: account.name || "-" },
+        {
+          label: "وضعیت",
+          value:
+            account.status === "active"
+              ? "فعال"
+              : account.status === "expired"
+                ? "منقضی"
+                : "تعلیق",
+        },
+        { label: "تاریخ پایان", value: formatDate(account.expires) },
+        {
+          label: "روز باقی‌مانده",
+          value:
+            account.daysLeft === null ? "نامحدود" : String(account.daysLeft),
+        },
+        {
+          label: "دستگاه‌ها",
+          value: `${account.devices.used} / ${account.devices.max}`,
+        },
+        { label: "شناسه دستگاه", value: deviceId || "----" },
+      ]
+    : [];
+
   return (
     <Modal
       visible={visible}
@@ -239,40 +276,62 @@ function AccountModal({
             },
           ]}
         >
-          <Ionicons name="person-circle" size={48} color={theme.primary} />
+          <Ionicons name="person-circle" size={44} color={theme.primary} />
           <ThemedText type="h4" style={styles.accountTitle}>
-            Account
+            اکانت
           </ThemedText>
-          <ThemedText
-            type="small"
-            style={{ color: theme.textSecondary, textAlign: "center" }}
-          >
-            Account and subscription details will appear here.
-          </ThemedText>
-          <View
-            style={[styles.accountRow, { borderColor: theme.backgroundTertiary }]}
-          >
-            <ThemedText type="small" style={{ color: theme.textSecondary }}>
-              Device ID
-            </ThemedText>
-            <ThemedText type="body" style={{ fontWeight: "700", letterSpacing: 1.5 }}>
-              {deviceId || "----"}
-            </ThemedText>
+
+          <View style={styles.accountRows}>
+            {rows.map((r) => (
+              <View
+                key={r.label}
+                style={[
+                  styles.accountRow,
+                  { borderColor: theme.backgroundTertiary },
+                ]}
+              >
+                <ThemedText type="small" style={{ color: theme.textSecondary }}>
+                  {r.label}
+                </ThemedText>
+                <ThemedText type="body" style={styles.accountValue}>
+                  {r.value}
+                </ThemedText>
+              </View>
+            ))}
           </View>
-          <TVFocusablePressable
-            onPress={onClose}
-            hasTVPreferredFocus={isTV}
-            accessibilityLabel="Close"
-            baseStyle={[styles.closeBtn, { backgroundColor: theme.primary }]}
-            focusedStyle={{ transform: [{ scale: 1.04 }] }}
-          >
-            <ThemedText
-              type="body"
-              style={{ color: theme.buttonText, fontWeight: "700" }}
+
+          <View style={styles.accountActions}>
+            <TVFocusablePressable
+              onPress={onClose}
+              hasTVPreferredFocus={isTV}
+              accessibilityLabel="بستن"
+              baseStyle={[styles.closeBtn, { backgroundColor: theme.primary }]}
+              focusedStyle={{ transform: [{ scale: 1.04 }] }}
             >
-              Close
-            </ThemedText>
-          </TVFocusablePressable>
+              <ThemedText
+                type="body"
+                style={{ color: theme.buttonText, fontWeight: "700" }}
+              >
+                بستن
+              </ThemedText>
+            </TVFocusablePressable>
+            <TVFocusablePressable
+              onPress={() => {
+                onClose();
+                logout();
+              }}
+              accessibilityLabel="خروج از حساب"
+              baseStyle={[
+                styles.logoutBtn,
+                { backgroundColor: theme.backgroundSecondary },
+              ]}
+              focusedStyle={{ transform: [{ scale: 1.04 }] }}
+            >
+              <ThemedText type="body" style={{ color: theme.error }}>
+                خروج از حساب
+              </ThemedText>
+            </TVFocusablePressable>
+          </View>
         </View>
       </View>
     </Modal>
@@ -285,7 +344,6 @@ export function HomeDashboard({
   onFavorites,
   onSearch,
   onGuide,
-  onAddPlaylist,
   onSettings,
   onRefresh,
   showGuide = true,
@@ -453,11 +511,11 @@ export function HomeDashboard({
         />
       ) : null}
       <Tile
-        id="addplaylist"
-        label="Add Playlist"
-        icon="add-circle-outline"
+        id="settings-wide"
+        label="Settings"
+        icon="settings-outline"
         colors={BrandGradients.utility}
-        onPress={onAddPlaylist}
+        onPress={onSettings}
         variant="wide"
         compact={compact}
         style={styles.wideTile}
@@ -733,20 +791,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  accountTitle: { marginTop: 4 },
+  accountTitle: { marginTop: 4, marginBottom: 6 },
+  accountRows: { alignSelf: "stretch" },
   accountRow: {
-    alignSelf: "stretch",
-    marginTop: 12,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    flexDirection: "row",
+    flexDirection: "row-reverse",
     justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+  },
+  accountValue: { fontWeight: "700" },
+  accountActions: { alignSelf: "stretch", flexDirection: "row", gap: 10, marginTop: 14 },
+  logoutBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: "center",
   },
   closeBtn: {
-    alignSelf: "stretch",
-    marginTop: 12,
+    flex: 1,
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: "center",

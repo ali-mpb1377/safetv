@@ -22,6 +22,7 @@ import { TvFavoritesScreen } from "./TvFavoritesScreen";
 import { EpgGuideView } from "@/components/EpgGuideView";
 import SettingsScreen from "@/screens/SettingsScreen";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { useAccount } from "@/context/AccountContext";
 import { useEpg } from "@/context/EpgContext";
 import { useTheme } from "@/hooks/useTheme";
 import { RootStackParamList } from "@/navigation/RootStackNavigator";
@@ -32,7 +33,8 @@ export function TvContainer() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
   const { theme } = useTheme();
-  const { playlist, settings, refreshPlaylist } = usePlaylist();
+  const { playlist, settings } = usePlaylist();
+  const { refreshChannels } = useAccount();
   const epg = useEpg();
 
   const [activeTab, setActiveTab] = useState<TvTabName>("Home");
@@ -71,12 +73,9 @@ export function TvContainer() {
             onFavorites={() => handleSelectTab("Favorites")}
             onSearch={() => handleSelectTab("Search")}
             onGuide={() => handleSelectTab("Guide")}
-            onAddPlaylist={() =>
-              navigation.navigate("Setup", { fromSettings: true })
-            }
             onSettings={() => handleSelectTab("Settings")}
             onRefresh={() => {
-              refreshPlaylist();
+              refreshChannels();
             }}
             showGuide={guideAvailable}
           />

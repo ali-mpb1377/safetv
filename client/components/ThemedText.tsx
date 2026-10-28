@@ -2,6 +2,12 @@ import { Text, type TextProps } from "react-native";
 
 import { useTheme } from "@/hooks/useTheme";
 import { Typography } from "@/constants/theme";
+import {
+  PERSIAN_BOLD,
+  PERSIAN_FONT_AVAILABLE,
+  PERSIAN_REGULAR,
+  hasPersian,
+} from "@/lib/persianFont";
 
 export type ThemedTextProps = TextProps & {
   lightColor?: string;
@@ -57,11 +63,25 @@ export function ThemedText({
     }
   };
 
+  // Persian text uses the bundled Vazirmatn (when present) so it renders the
+  // same on every device; everything else keeps Rubik.
+  const persianStyle =
+    PERSIAN_FONT_AVAILABLE && hasPersian(rest.children)
+      ? {
+          fontFamily:
+            type === "h1" || type === "h2" || type === "h3" || type === "h4"
+              ? PERSIAN_BOLD
+              : PERSIAN_REGULAR,
+          fontWeight: "normal" as const,
+        }
+      : null;
+
   return (
     <Text
       style={[
         { color: getColor(), fontFamily: "Rubik_400Regular" },
         getTypeStyle(),
+        persianStyle,
         style,
       ]}
       {...rest}

@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Android%20TV-3DDC84?logo=android&logoColor=white)](#-supported-platforms)
 [![Framework](https://img.shields.io/badge/Framework-Expo%20SDK%2054%20%7C%20React%20Native-000020?logo=expo&logoColor=white)](#-tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](#-tech-stack)
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)](../../releases)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#-license)
 
 [**Download**](../../releases/latest) · [**What's new**](#-whats-new-compared-to-prysm) · [**Features**](#-features) · [**Getting Started**](#-getting-started)
@@ -21,12 +21,19 @@ SafeTV is an **IPTV player** with a purpose-built native playback engine and a
 [Prysm](https://github.com/dereferencex/prysm) by dereferencex, reworked and
 maintained by **[ali-mpb1377](https://github.com/ali-mpb1377)**.
 
-No content, no subscriptions, no accounts: bring your own M3U source and go.
+SafeTV signs in with a **username and password** and downloads the channel list
+from its own server. There is no option to add playlist links or stream
+addresses.
 
 ---
 
 ## 🆕 What's new compared to Prysm
 
+- **Account-based** — login with username and password; channels, logos and the
+  subscription status come from the server (token stored encrypted). Expired
+  or suspended accounts see only a warning screen.
+- **Animated loading screen** that tests the connection and checks the account
+  at start-up.
 - **Rebrand** — new name, logo, app icon, TV banner and splash screen.
 - **New home screen** — navy dashboard with logo, date/clock and gradient tiles
   (Live TV, Favorites, Series/Search, EPG Catch-up, Add Playlist, Settings), an
@@ -57,12 +64,13 @@ See the [CHANGELOG](CHANGELOG.md) for the full list.
 
 ## ✨ Features
 
-### 📡 Playlists
-- **M3U / M3U8 / PLS / XSPF / JSON** support, from **URL or local file**
-- **Multiple playlists** — save, switch and manage
-- **Auto-refresh** — off, 5 min, 15 min, daily (default) or custom
-- **Categories** with filtering, remembered last category and per-category
-  visibility
+### 🔐 Account & channels
+- **Username + password** login, token stored encrypted on the device
+- Channels, groups and logos are downloaded from the account server
+- Subscription status checked at start-up, on return to the app and
+  periodically; expired / suspended accounts see only a warning screen
+- Categories with filtering, per-category visibility and a PIN lock for
+  showing hidden categories again
 
 ### 🎬 Playback
 - Custom **native player** — **VLC** (default) or Media3/ExoPlayer
@@ -84,11 +92,8 @@ See the [CHANGELOG](CHANGELOG.md) for the full list.
 - 3-column Live TV layout with preview and top navigation
 - Full **D-pad / remote** navigation with clear focus rings
 
-### 📡 Network Stream Player
-- Play any URL directly, with custom headers and DRM
-
 ### 🧰 Also included
-- In-app log viewer and crash handler
+- Crash handler
 - Per-ABI APKs — `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64` and a universal build
 
 ---
@@ -154,8 +159,8 @@ Per-ABI APKs land in `android/app/build/outputs/apk/release/`.
 3. Commit, push, then tag:
 
 ```bash
-git tag v1.6.0
-git push origin v1.6.0
+git tag v1.7.0
+git push origin v1.7.0
 ```
 
 The [workflow](.github/workflows/build-apk.yml) builds every ABI and publishes
@@ -182,7 +187,8 @@ The [workflow](.github/workflows/build-apk.yml) builds every ABI and publishes
 | [`tv-player`](modules/tv-player) | ExoPlayer/VLC engine, DRM, PiP, background audio, media session |
 | [`tv-channel`](modules/tv-channel) | Android TV launcher banner and home-row channel tiles |
 | [`crash-handler`](modules/crash-handler) | Native crash capture |
-| [`logcat-reader`](modules/logcat-reader) | In-app log viewer |
+| [`logcat-reader`](modules/logcat-reader) | Native log capture |
+| [`secure-token`](modules/secure-token) | Encrypted (Android Keystore) storage for the account token |
 
 ---
 

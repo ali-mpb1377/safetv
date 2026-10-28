@@ -23,11 +23,16 @@ import {
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
+import { persianFontMap } from "@/lib/persianFont";
 
 import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { PlaylistProvider } from "@/context/PlaylistContext";
 import { EpgProvider } from "@/context/EpgContext";
 import { PinLockProvider } from "@/context/PinLockContext";
+import { AccountProvider, useAccount } from "@/context/AccountContext";
+import LoadingScreen from "@/screens/LoadingScreen";
+import LoginScreen from "@/screens/LoginScreen";
+import AccountStatusScreen from "@/screens/AccountStatusScreen";
 import { ThemeProvider, useThemeContext } from "@/context/ThemeContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LogCapture } from "@/components/LogCapture";
@@ -103,23 +108,58 @@ function AppContent() {
     >
       <KeyboardProvider>
         <PlaylistProvider>
-          <EpgProvider>
-            <PinLockProvider>
-              <NavigationContainer
-                ref={navigationRef}
-                theme={navigationTheme}
-                linking={linking}
-                onReady={configureOrientation}
-                onStateChange={configureOrientation}
-              >
-                <RootStackNavigator />
-              </NavigationContainer>
-            </PinLockProvider>
-          </EpgProvider>
+          <AccountProvider>
+            <EpgProvider>
+              <PinLockProvider>
+                <AccountGate
+                  navigationRef={navigationRef}
+                  navigationTheme={navigationTheme}
+                  onNavigationChange={configureOrientation}
+                />
+              </PinLockProvider>
+            </EpgProvider>
+          </AccountProvider>
         </PlaylistProvider>
         <StatusBar style={isDark ? "light" : "dark"} />
       </KeyboardProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * The app is only reachable with a valid account: loading -> login (no
+ * token) -> blocked / offline screens -> the real navigation tree.
+ */
+function AccountGate({
+  navigationRef,
+  navigationTheme,
+  onNavigationChange,
+}: {
+  navigationRef: ReturnType<typeof useNavigationContainerRef<RootStackParamList>>;
+  navigationTheme: typeof DarkTheme;
+  onNavigationChange: () => void;
+}) {
+  const { phase, bootStep } = useAccount();
+
+  useEffect(() => {
+    onNavigationChange();
+  }, [phase, onNavigationChange]);
+
+  if (phase === "boot") return <LoadingScreen step={bootStep} />;
+  if (phase === "login") return <LoginScreen />;
+  if (phase === "blocked" || phase === "offline") {
+    return <AccountStatusScreen />;
+  }
+  return (
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navigationTheme}
+      linking={linking}
+      onReady={onNavigationChange}
+      onStateChange={onNavigationChange}
+    >
+      <RootStackNavigator />
+    </NavigationContainer>
   );
 }
 
@@ -129,6 +169,7 @@ export default function App() {
     Rubik_500Medium,
     Rubik_600SemiBold,
     Rubik_700Bold,
+    ...persianFontMap,
   });
 
   useEffect(() => {

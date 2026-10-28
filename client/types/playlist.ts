@@ -30,6 +30,8 @@ export interface Channel {
   headers?: Record<string, string>;
   isLive?: boolean;
   quality?: string;
+  /** Stream is served by the account server (needs the account token). */
+  viaServer?: boolean;
 }
 
 export interface Playlist {

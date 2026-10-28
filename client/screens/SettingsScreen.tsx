@@ -441,10 +441,6 @@ export default function SettingsScreen({
     setShowClearAllConfirm(false);
   };
 
-  const handleAddPlaylist = () => {
-    if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    navigation.navigate("Setup", { fromSettings: true });
-  };
 
   const handleEditPlaylist = (playlistId: string) => {
     const playlistInfo = playlists.find((p) => p.id === playlistId);
@@ -623,65 +619,6 @@ export default function SettingsScreen({
               type="small"
               style={[styles.sectionTitle, { color: theme.textSecondary }]}
             >
-              PLAYLISTS
-            </ThemedText>
-            <View style={styles.section}>
-              <SettingsRow
-                icon="list"
-                title="Active Playlist"
-                subtitle={
-                  playlist
-                    ? `${playlist.channels.length} channels`
-                    : "No playlist loaded"
-                }
-                value={getActivePlaylistName()}
-                onPress={() => setShowPlaylistModal(true)}
-                showChevron
-              />
-              {playlists.length > 0 ? (
-                <SettingsRow
-                  icon="albums"
-                  title="Manage Playlists"
-                  subtitle={`${playlists.length} playlist${playlists.length > 1 ? "s" : ""} saved`}
-                  onPress={() => setShowPlaylistModal(true)}
-                  showChevron
-                />
-              ) : null}
-              <SettingsRow
-                icon="add-circle"
-                title="Add Playlist"
-                subtitle="Add M3U URL or file"
-                onPress={handleAddPlaylist}
-                showChevron
-              />
-              <SettingsRow
-                icon="refresh"
-                title="Auto-Refresh"
-                subtitle="Automatically update playlist"
-                value={getAutoRefreshLabel()}
-                onPress={() => setShowAutoRefreshModal(true)}
-                showChevron
-              />
-              <SettingsRow
-                icon="refresh-circle"
-                title="Refresh Playlist Now"
-                subtitle={
-                  playlist ? `Re-fetch ${playlist.name}` : "No playlist loaded"
-                }
-                onPress={handleRefreshPlaylist}
-                disabled={!playlist?.url || isLoadingPlaylist}
-                rightComponent={
-                  isLoadingPlaylist ? (
-                    <ActivityIndicator size="small" color={theme.primary} />
-                  ) : undefined
-                }
-              />
-            </View>
-
-            <ThemedText
-              type="small"
-              style={[styles.sectionTitle, { color: theme.textSecondary }]}
-            >
               CHANNELS
             </ThemedText>
             <View style={styles.section}>
@@ -831,29 +768,6 @@ export default function SettingsScreen({
                 subtitle="Adjust channel card text size"
                 value={getTextSizeLabel()}
                 onPress={() => setShowTextSizeModal(true)}
-                showChevron
-              />
-            </View>
-
-            <ThemedText
-              type="small"
-              style={[styles.sectionTitle, { color: theme.textSecondary }]}
-            >
-              ADVANCED
-            </ThemedText>
-            <View style={styles.section}>
-              <SettingsRow
-                icon="wifi"
-                title="Network Stream"
-                subtitle="Configure DRM, headers, and user agent"
-                onPress={() => navigation.navigate("NetworkStream")}
-                showChevron
-              />
-              <SettingsRow
-                icon="document-text-outline"
-                title="View Logs"
-                subtitle="In-app log viewer for bug reporting"
-                onPress={() => navigation.navigate("Logs")}
                 showChevron
               />
             </View>

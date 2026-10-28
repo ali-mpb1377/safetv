@@ -6,6 +6,8 @@ import { useIsFocused } from "@react-navigation/native";
 
 import { ThemedText } from "@/components/ThemedText";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { useAccount } from "@/context/AccountContext";
+import { buildStreamHeaders } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Channel } from "@/types/playlist";
 import { Spacing, BorderRadius } from "@/constants/theme";
@@ -37,6 +39,7 @@ export function MiniPreviewPlayer({
   const isFocused = useIsFocused();
   const { theme } = useTheme();
   const { settings } = usePlaylist();
+  const { getToken } = useAccount();
   const viewRef = useRef<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,10 +58,7 @@ export function MiniPreviewPlayer({
       TvPlayerCommands.setPlayerEngine(viewRef, settings.playerEngine);
       TvPlayerCommands.loadSource(viewRef, {
         url: channel.url,
-        headers:
-          channel.headers && Object.keys(channel.headers).length > 0
-            ? channel.headers
-            : undefined,
+        headers: buildStreamHeaders(channel, getToken()),
         drmType: channel.drm?.type,
         drmLicenseUrl: channel.drm?.licenseServer,
         drmLicenseKey: channel.drm?.licenseKey,

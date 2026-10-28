@@ -1,0 +1,9 @@
+{
+  "name": "secure-token",
+  "version": "1.0.0",
+  "description": "Stores small secrets (the account token) encrypted with an Android Keystore key.",
+  "main": "src/index.ts",
+  "expo": {
+    "name": "SecureToken"
+  }
+}

@@ -7,6 +7,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.7.0] — 2026-10-27
+
+SafeTV now works with an account instead of playlists.
+
+### Added
+- **Account login** — username + password screen; the app cannot be used until
+  a valid account is logged in. The X in the corner closes the app.
+- **Account server** — channels, groups and logos are downloaded from the
+  server after login. The token is stored encrypted (Android Keystore,
+  AES-256-GCM) and the password is never stored.
+- **Animated loading screen** with the logo: tests the connection, checks the
+  account, then loads the channels.
+- **Account section** (home screen) — name, status, end date, days left and
+  device count; logout.
+- **Subscription control** — the server decides: expired / suspended accounts
+  and blocked devices see only a warning screen with "check again"; no channel
+  list is kept. The subscription is re-checked when the app opens, when it
+  returns to the foreground and every `check_interval_hours` while it stays
+  open. A rejected stream (401/403) triggers an immediate re-check.
+- Server streams are played with the account token (only on the server's own
+  host); direct streams only use the headers the server lists for them.
+
+- **Persian font** — Persian text uses a bundled Vazirmatn font (drop
+  `Vazirmatn-Regular.ttf` / `Vazirmatn-Bold.ttf` into `assets/fonts/`), so it
+  looks the same on every device.
+
+### Removed
+- Adding M3U / playlist links, local playlist files, the network stream player
+  and the log viewer. Playlists saved by older versions are deleted on start.
+
+### Notes
+- The server host is HTTPS-only (cleartext is blocked for it in the network
+  security config); direct http:// channel streams still work.
+- The channel list is kept in memory only (never written to disk).
+
+---
+
 ## [1.6.0] — 2026-10-26
 
 First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
@@ -115,6 +152,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.7.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.6.0
 [1.5.0]: https://github.com/dereferencex/prysm/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/dereferencex/prysm/compare/v1.4.1...v1.4.2

@@ -52,6 +52,8 @@ interface PlaylistContextType {
   toggleFavoriteCategory: (category: string) => Promise<void>;
   addToRecent: (channelId: string) => Promise<void>;
   updateSettings: (settings: Partial<storage.AppSettings>) => Promise<void>;
+  /** Channels now come from the account server: sets (or clears) them. */
+  setServerPlaylist: (playlist: Playlist | null) => void;
   clearPlaylist: () => Promise<void>;
   clearAllData: () => Promise<void>;
   refreshPlaylist: () => Promise<void>;
@@ -258,32 +260,19 @@ export function PlaylistProvider({ children }: { children: ReactNode }) {
         storage.getSettings(),
       ]);
 
-      setPlaylists(savedPlaylists);
-      setActivePlaylistId(savedActiveId);
+      // The app no longer supports user-added playlists / links. Anything
+      // saved by an older version is removed so no stream address stays on
+      // the device. Channels now come from the account server.
+      for (const old of savedPlaylists) {
+        storage.deletePlaylist(old.id).catch(() => {});
+      }
+      setPlaylists([]);
+      setActivePlaylistId(null);
+      void savedActiveId;
       setFavorites(savedFavorites);
       setFavoriteCategories(savedFavoriteCategories);
       setRecentChannels(savedRecent);
       setSettings(savedSettings);
-
-      if (savedActiveId) {
-        const savedPlaylist = await storage.getPlaylist(savedActiveId);
-        if (savedPlaylist) {
-          setPlaylist(savedPlaylist);
-
-          // Sync favourites to the Android TV launcher home row on startup
-          // so the row is populated after a reinstall or data clear without
-          // needing to toggle a favourite first.
-          if (savedFavorites.length > 0) {
-            const idMap = new Map<string, Channel>();
-            for (const ch of savedPlaylist.channels) idMap.set(ch.id, ch);
-            const favChannels = savedFavorites
-              .map((id) => idMap.get(id))
-              .filter((ch): ch is Channel => ch !== undefined)
-              .map((ch) => ({ id: ch.id, name: ch.name, logo: ch.logo }));
-            syncFavourites(favChannels);
-          }
-        }
-      }
     } catch (err) {
       console.error("Error loading initial data:", err);
       setError("Failed to load saved data");
@@ -457,6 +446,26 @@ export function PlaylistProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const setServerPlaylist = useCallback(
+    (next: Playlist | null) => {
+      setPlaylist(next);
+      if (!next) {
+        syncFavourites([]);
+        return;
+      }
+      if (favorites.length > 0) {
+        const idMap = new Map<string, Channel>();
+        for (const ch of next.channels) idMap.set(ch.id, ch);
+        const favChannels = favorites
+          .map((id) => idMap.get(id))
+          .filter((ch): ch is Channel => ch !== undefined)
+          .map((ch) => ({ id: ch.id, name: ch.name, logo: ch.logo }));
+        syncFavourites(favChannels);
+      }
+    },
+    [favorites],
+  );
+
   const clearPlaylist = async () => {
     if (activePlaylistId) {
       await storage.deletePlaylist(activePlaylistId);
@@ -560,6 +569,7 @@ export function PlaylistProvider({ children }: { children: ReactNode }) {
         hiddenCategories,
         setCategoryHidden,
         setAllCategoriesHidden,
+        setServerPlaylist,
         playlists,
         activePlaylistId,
         favorites,

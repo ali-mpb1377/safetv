@@ -22,6 +22,8 @@ import {
   DRMConfig,
 } from "@/components/AdvancedVideoPlayer";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { useAccount } from "@/context/AccountContext";
+import { buildStreamHeaders } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
 import { extractDRMFromManifest } from "@/lib/manifest-drm-extractor";
@@ -79,6 +81,7 @@ export default function PlayerScreen() {
   const route = useRoute<PlayerRouteProp>();
   const { theme } = useTheme();
   const { channelId } = route.params;
+  const { getToken, reportPlaybackForbidden } = useAccount();
 
   const {
     getChannelById,
@@ -107,6 +110,10 @@ export default function PlayerScreen() {
 
   useEffect(() => {
     if (!channel) return;
+    if (channel.viaServer) {
+      setManifestDrm(undefined);
+      return;
+    }
     // If the channel already has KODIPROP DRM with a valid license key or URL, no
     // need to fetch from the manifest.
     if (
@@ -213,9 +220,16 @@ export default function PlayerScreen() {
     [channelId, navigation],
   );
 
-  const handleError = useCallback((error: string) => {
-    console.error("Player error:", error);
-  }, []);
+  const handleError = useCallback(
+    (error: string) => {
+      // No stream address or token in logs.
+      console.error("Player error");
+      // A rejected stream can mean the subscription just ended: ask the
+      // server, which decides what happens next.
+      if (/\b(401|403)\b/.test(error)) reportPlaybackForbidden();
+    },
+    [reportPlaybackForbidden],
+  );
 
   const drmConfig = useMemo((): DRMConfig | undefined => {
     // Prefer KODIPROP-extracted DRM from the playlist
@@ -255,12 +269,13 @@ export default function PlayerScreen() {
     return undefined;
   }, [channel?.drm, manifestDrm]);
 
-  const streamHeaders = useMemo((): Record<string, string> | undefined => {
-    if (!channel?.headers) return undefined;
-    return Object.keys(channel.headers).length > 0
-      ? channel.headers
-      : undefined;
-  }, [channel?.headers]);
+  // Server streams get the account token (same host only); direct streams
+  // get only the headers the server listed for them.
+  const streamHeaders = useMemo(
+    (): Record<string, string> | undefined =>
+      channel ? buildStreamHeaders(channel, getToken()) : undefined,
+    [channel, getToken],
+  );
 
   if (!channel) {
     return (
