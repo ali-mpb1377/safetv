@@ -7,6 +7,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.7.4] — 2026-10-29
+
+### Fixed
+- Server streams now play in VLC: the device token is sent as `?key=` in the
+  stream address (the server accepts it there and carries it into every HLS
+  segment link) instead of a request header, which VLC cannot send.
+
+---
+
+## [1.7.3] — 2026-10-28
+
+### Fixed
+- ExoPlayer: a stream address without a file extension (for example
+  `/s/<id>`) that returned "container unsupported" is now retried as HLS.
+
+---
+
 ## [1.7.2] — 2026-10-28
 
 ### Fixed
@@ -168,6 +185,8 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.7.4]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.4
+[1.7.3]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.3
 [1.7.2]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.2
 [1.7.1]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.1
 [1.7.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.0

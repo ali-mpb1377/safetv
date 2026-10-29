@@ -9,7 +9,7 @@ export const BASE_URL = "https://it.web-gaming.ir";
 const SERVER_HOST = "it.web-gaming.ir";
 const REQUEST_TIMEOUT_MS = 20000;
 
-export const APP_VERSION = "1.7.2";
+export const APP_VERSION = "1.7.4";
 
 export type AccountStatus = "active" | "expired" | "suspended";
 
@@ -218,26 +218,39 @@ export async function apiChannels(token: string): Promise<Playlist> {
   };
 }
 
+function streamHost(url: string): string {
+  // Plain regex instead of `new URL()`: React Native's URL class can throw on
+  // `.hostname`, which would silently drop the token.
+  const m = /^https?:\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(url);
+  return m ? m[1].toLowerCase() : "";
+}
+
 /**
- * Headers for playing a channel.
- *  - via_server=true  -> Authorization (same host as BASE_URL only).
- *  - via_server=false -> only the headers the server listed; never the token.
+ * Address to play. Streams served by the account server carry the device
+ * token as `?key=` (the server accepts it there, and rewrites every HLS
+ * segment link with it too). That works in every player, including VLC, which
+ * cannot send custom request headers. Direct streams are returned unchanged,
+ * and the token is never added for any other host.
+ */
+export function buildStreamUrl(
+  channel: Pick<Channel, "url" | "viaServer">,
+  token: string | null,
+): string {
+  if (!channel.viaServer || !token) return channel.url;
+  if (streamHost(channel.url) !== SERVER_HOST) return channel.url;
+  const sep = channel.url.includes("?") ? "&" : "?";
+  return `${channel.url}${sep}key=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Extra request headers for playing a channel.
+ *  - via_server=true  -> none (the token is in the address, see above).
+ *  - via_server=false -> only the headers the server listed for that channel.
  */
 export function buildStreamHeaders(
   channel: Pick<Channel, "url" | "headers" | "viaServer">,
-  token: string | null,
 ): Record<string, string> | undefined {
-  if (channel.viaServer) {
-    if (!token) return undefined;
-    // Plain regex instead of `new URL()`: React Native's URL class can throw
-    // on `.hostname`, which would silently drop the token and make every
-    // server stream fail with 401/403.
-    const match = /^https?:\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(channel.url);
-    const host = match ? match[1].toLowerCase() : "";
-    // Safety net: never send the token to another host.
-    if (host !== SERVER_HOST) return undefined;
-    return { Authorization: `Bearer ${token}` };
-  }
+  if (channel.viaServer) return undefined;
   return channel.headers && Object.keys(channel.headers).length > 0
     ? channel.headers
     : undefined;

@@ -23,7 +23,7 @@ import {
 } from "@/components/AdvancedVideoPlayer";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useAccount } from "@/context/AccountContext";
-import { buildStreamHeaders } from "@/lib/api";
+import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
 import { extractDRMFromManifest } from "@/lib/manifest-drm-extractor";
@@ -273,7 +273,11 @@ export default function PlayerScreen() {
   // get only the headers the server listed for them.
   const streamHeaders = useMemo(
     (): Record<string, string> | undefined =>
-      channel ? buildStreamHeaders(channel, getToken()) : undefined,
+      channel ? buildStreamHeaders(channel) : undefined,
+    [channel],
+  );
+  const streamUrl = useMemo(
+    () => (channel ? buildStreamUrl(channel, getToken()) : ""),
     [channel, getToken],
   );
 
@@ -308,7 +312,7 @@ export default function PlayerScreen() {
     <View style={[styles.container, { width, height }]}>
       <StatusBar hidden translucent backgroundColor="transparent" />
       <AdvancedVideoPlayer
-        source={channel.url}
+        source={streamUrl}
         title={channel.name}
         subtitle={epgSubtitle}
         poster={channel.logo}

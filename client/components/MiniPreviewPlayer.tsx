@@ -7,7 +7,7 @@ import { useIsFocused } from "@react-navigation/native";
 import { ThemedText } from "@/components/ThemedText";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useAccount } from "@/context/AccountContext";
-import { buildStreamHeaders } from "@/lib/api";
+import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Channel } from "@/types/playlist";
 import { Spacing, BorderRadius } from "@/constants/theme";
@@ -57,8 +57,8 @@ export function MiniPreviewPlayer({
       if (!viewRef.current) return;
       TvPlayerCommands.setPlayerEngine(viewRef, settings.playerEngine);
       TvPlayerCommands.loadSource(viewRef, {
-        url: channel.url,
-        headers: buildStreamHeaders(channel, getToken()),
+        url: buildStreamUrl(channel, getToken()),
+        headers: buildStreamHeaders(channel),
         drmType: channel.drm?.type,
         drmLicenseUrl: channel.drm?.licenseServer,
         drmLicenseKey: channel.drm?.licenseKey,

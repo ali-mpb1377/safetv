@@ -960,7 +960,8 @@ class ExoPlayerController(
                 "- ${error.message}")
 
             if (!pendingHlsFallback &&
-                error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                (error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
             ) {
                 val mimeType = getStreamMimeType(currentUrl)
                 val looksLikeIptv = currentUrl.lowercase().let { url ->
@@ -968,7 +969,12 @@ class ExoPlayerController(
                         url.contains("/channel/") || url.contains("/hls/") ||
                         url.contains("m3u8")
                 }
-                if (mimeType == null && looksLikeIptv) {
+                // "Container unsupported" on an address without a known
+                // extension (e.g. /s/<id>) almost always means an HLS playlist
+                // served without an HLS content type, so retry as HLS.
+                val containerUnsupported =
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+                if (mimeType == null && (looksLikeIptv || containerUnsupported)) {
                     Log.w(TAG, "Unrecognized IPTV stream format — retrying with HLS fallback")
                     pendingHlsFallback = true
                     load(
