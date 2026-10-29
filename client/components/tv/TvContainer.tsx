@@ -23,6 +23,7 @@ import { EpgGuideView } from "@/components/EpgGuideView";
 import SettingsScreen from "@/screens/SettingsScreen";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useAccount } from "@/context/AccountContext";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { useEpg } from "@/context/EpgContext";
 import { useTheme } from "@/hooks/useTheme";
 import { RootStackParamList } from "@/navigation/RootStackNavigator";
@@ -94,9 +95,10 @@ export function TvContainer() {
             <EpgGuideView
               channels={playlist?.channels || []}
               getProgramsForChannel={epg.getProgramsForChannel}
-              onSelectChannel={(id) =>
-                navigation.navigate("Player", { channelId: id })
-              }
+              onSelectChannel={(id) => {
+                setPlaybackQueue(null);
+                navigation.navigate("Player", { channelId: id });
+              }}
             />
           </View>
         );

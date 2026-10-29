@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.7.5] — 2026-10-29
+
+### Fixed
+- Next / previous channel in the player now follows the list you opened it
+  from (selected category, search results or favorites) instead of the whole
+  playlist. At the first or last channel of a category it stays on that
+  channel instead of jumping into another category.
+
+---
+
 ## [1.7.4] — 2026-10-29
 
 ### Fixed
@@ -185,6 +195,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.7.5]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.5
 [1.7.4]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.4
 [1.7.3]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.3
 [1.7.2]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.2

@@ -23,6 +23,7 @@ import {
 } from "@/components/AdvancedVideoPlayer";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useAccount } from "@/context/AccountContext";
+import { getPlaybackQueue } from "@/lib/playbackQueue";
 import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
@@ -190,21 +191,36 @@ export default function PlayerScreen() {
     (direction: "prev" | "next") => {
       if (!playlist) return;
 
-      const currentIndex = playlist.channels.findIndex(
-        (ch) => ch.id === channelId,
-      );
+      // Follow the list the user was browsing (category / search / favorites).
+      // Fall back to the whole playlist when there is none.
+      const queue = getPlaybackQueue();
+      const list =
+        queue && queue.some((ch) => ch.id === channelId)
+          ? queue
+          : playlist.channels;
+      const isWholePlaylist = list.length >= playlist.channels.length;
+
+      const currentIndex = list.findIndex((ch) => ch.id === channelId);
       if (currentIndex === -1) return;
 
       let newIndex: number;
       if (direction === "prev") {
-        newIndex =
-          currentIndex === 0 ? playlist.channels.length - 1 : currentIndex - 1;
+        if (currentIndex === 0) {
+          if (!isWholePlaylist) return; // first channel of the category: stay
+          newIndex = list.length - 1;
+        } else {
+          newIndex = currentIndex - 1;
+        }
       } else {
-        newIndex =
-          currentIndex === playlist.channels.length - 1 ? 0 : currentIndex + 1;
+        if (currentIndex === list.length - 1) {
+          if (!isWholePlaylist) return; // last channel of the category: stay
+          newIndex = 0;
+        } else {
+          newIndex = currentIndex + 1;
+        }
       }
 
-      const newChannel = playlist.channels[newIndex];
+      const newChannel = list[newIndex];
       if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       navigation.replace("Player", { channelId: newChannel.id });
     },

@@ -22,6 +22,7 @@ import { Channel } from "@/types/playlist";
 import { TvEpgBanner } from "./TvEpgBanner";
 import { MiniPreviewPlayer } from "@/components/MiniPreviewPlayer";
 import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 
 const isTV = Platform.isTV;
 
@@ -251,9 +252,12 @@ export function TvLiveTvScreen({
   const handleChannelPress = useCallback(
     (ch: Channel) => {
       setSelectedChannelId(ch.id);
+      // Next / previous in the player follow what is shown here (category,
+      // search...), not the whole playlist.
+      setPlaybackQueue(filteredChannels);
       onChannelPress(ch);
     },
-    [onChannelPress],
+    [onChannelPress, filteredChannels],
   );
 
   // EPG details for the active banner channel

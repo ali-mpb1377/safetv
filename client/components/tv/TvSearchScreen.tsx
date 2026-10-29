@@ -15,6 +15,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { ThemedText } from "@/components/ThemedText";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { useTheme } from "@/hooks/useTheme";
 import { useFocusScroll } from "@/hooks/useFocusScroll";
 import { Colors, Spacing } from "@/constants/theme";
@@ -110,9 +111,10 @@ export function TvSearchScreen() {
             <ChannelResultCard
               key={channel.id}
               channel={channel}
-              onPress={() =>
-                navigation.navigate("Player", { channelId: channel.id })
-              }
+              onPress={() => {
+                setPlaybackQueue(results);
+                navigation.navigate("Player", { channelId: channel.id });
+              }}
               onLayoutItem={(e) => resultsScroll.registerItem(channel.id, e)}
               onFocused={() => resultsScroll.focusOn(channel.id)}
             />

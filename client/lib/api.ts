@@ -9,7 +9,7 @@ export const BASE_URL = "https://it.web-gaming.ir";
 const SERVER_HOST = "it.web-gaming.ir";
 const REQUEST_TIMEOUT_MS = 20000;
 
-export const APP_VERSION = "1.7.4";
+export const APP_VERSION = "1.7.5";
 
 export type AccountStatus = "active" | "expired" | "suspended";
 
