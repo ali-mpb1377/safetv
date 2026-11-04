@@ -879,13 +879,25 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
           scheduleHideRef.current();
         }
       } else if (eventType === "left" || eventType === "right") {
-        // D-pad left/right on seek bar: scrub 10s
         if (showControlsRef.current && seekBarFocusedRef.current) {
+          // D-pad left/right on the seek bar: scrub 10s
           const dir = eventType === "left" ? -SEEK_MS : SEEK_MS;
           handleSeek(dir);
         } else if (!showControlsRef.current) {
-          showAndScheduleHideRef.current();
+          // Controls hidden: right = next channel, left = previous channel
+          // (same as the buttons on screen). Without a channel list to step
+          // through, it just shows the controls like before.
+          const nav = eventType === "right" ? onNext : onPrevious;
+          if (nav) {
+            if (isBackgroundPlayingRef.current) {
+              TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+            }
+            nav();
+          } else {
+            showAndScheduleHideRef.current();
+          }
         } else {
+          // Controls visible: left / right move the focus between buttons.
           scheduleHideRef.current();
         }
       } else if (eventType === "select") {

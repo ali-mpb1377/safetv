@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect } from "react";
-import { StyleSheet, View, ActivityIndicator } from "react-native";
+import {
+  StyleSheet,
+  View,
+  ActivityIndicator,
+  I18nManager,
+} from "react-native";
 import {
   NavigationContainer,
   DarkTheme,
@@ -200,8 +205,17 @@ export default function App() {
   );
 }
 
+// The whole UI is left-to-right on every device. On a TV set to Persian or
+// Arabic, React Native mirrors rows, which put "previous" on the right of
+// "play" and made the remote's left / right move the focus the wrong way.
+// (Persian text still reads right-to-left by itself.) The stored preference
+// takes effect from the next launch; the root `direction` below applies now.
+I18nManager.allowRTL(false);
+I18nManager.forceRTL(false);
+
 const styles = StyleSheet.create({
   root: {
+    direction: "ltr",
     flex: 1,
   },
   loadingContainer: {

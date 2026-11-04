@@ -7,6 +7,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.1] — 2026-11-04
+
+### Fixed
+- TV: the buttons around Play / Pause were mirrored on a TV set to Persian or
+  Arabic (previous on the right, next on the left, and the remote's left /
+  right moved the focus the wrong way). The layout is now always left-to-right.
+
+### Added
+- TV player: with the controls hidden, the remote's **right** key goes to the
+  next channel and **left** goes to the previous one, like the two buttons on
+  screen. With the controls visible, left / right still move between buttons.
+
+---
+
 ## [1.8.0] — 2026-11-04
 
 Performance and stability release for weak TV boxes.
@@ -217,6 +231,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.8.1]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.8.1
 [1.8.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.8.0
 [1.7.5]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.5
 [1.7.4]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.4

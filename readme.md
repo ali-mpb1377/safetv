@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Android%20TV-3DDC84?logo=android&logoColor=white)](#-supported-platforms)
 [![Framework](https://img.shields.io/badge/Framework-Expo%20SDK%2054%20%7C%20React%20Native-000020?logo=expo&logoColor=white)](#-tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](#-tech-stack)
-[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](../../releases)
+[![Version](https://img.shields.io/badge/version-1.8.1-blue.svg)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#-license)
 
 [**Download**](../../releases/latest) · [**What's new**](#-whats-new-compared-to-prysm) · [**Features**](#-features) · [**Getting Started**](#-getting-started)
@@ -159,8 +159,8 @@ Per-ABI APKs land in `android/app/build/outputs/apk/release/`.
 3. Commit, push, then tag:
 
 ```bash
-git tag v1.8.0
-git push origin v1.8.0
+git tag v1.8.1
+git push origin v1.8.1
 ```
 
 The [workflow](.github/workflows/build-apk.yml) builds every ABI and publishes
