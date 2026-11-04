@@ -23,7 +23,11 @@ import {
 } from "@/components/AdvancedVideoPlayer";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useAccount } from "@/context/AccountContext";
-import { getPlaybackQueue } from "@/lib/playbackQueue";
+import {
+  getPlaybackQueue,
+  isPlaybackQueueLooping,
+  stepChannel,
+} from "@/lib/playbackQueue";
 import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
@@ -194,33 +198,15 @@ export default function PlayerScreen() {
       // Follow the list the user was browsing (category / search / favorites).
       // Fall back to the whole playlist when there is none.
       const queue = getPlaybackQueue();
-      const list =
-        queue && queue.some((ch) => ch.id === channelId)
-          ? queue
-          : playlist.channels;
+      const useQueue = !!queue && queue.some((ch) => ch.id === channelId);
+      const list = useQueue && queue ? queue : playlist.channels;
       const isWholePlaylist = list.length >= playlist.channels.length;
+      // A search result keeps cycling inside itself; a category / favorites
+      // list stops at its ends (unless it is the whole playlist).
+      const wrap = isWholePlaylist || (useQueue && isPlaybackQueueLooping());
 
-      const currentIndex = list.findIndex((ch) => ch.id === channelId);
-      if (currentIndex === -1) return;
-
-      let newIndex: number;
-      if (direction === "prev") {
-        if (currentIndex === 0) {
-          if (!isWholePlaylist) return; // first channel of the category: stay
-          newIndex = list.length - 1;
-        } else {
-          newIndex = currentIndex - 1;
-        }
-      } else {
-        if (currentIndex === list.length - 1) {
-          if (!isWholePlaylist) return; // last channel of the category: stay
-          newIndex = 0;
-        } else {
-          newIndex = currentIndex + 1;
-        }
-      }
-
-      const newChannel = list[newIndex];
+      const newChannel = stepChannel(list, channelId, direction, wrap);
+      if (!newChannel) return;
       if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       navigation.replace("Player", { channelId: newChannel.id });
     },

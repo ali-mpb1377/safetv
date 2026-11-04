@@ -18,7 +18,8 @@ import java.io.InputStreamReader
 /**
  * Streams the app's own Android logcat lines into JS via an EventEmitter.
  *
- * Spawns: `logcat -v threadtime --pid=<this pid> --dividers`
+ * Spawns: `logcat -v threadtime --pid=<this pid> --dividers *:W <player tags>:I`
+ *   (warnings/errors from everything + info events of the player classes)
  *
  * The `--pid` filter restricts output to lines originating from this
  * process (and child threads). An app can read its own process's logcat
@@ -113,11 +114,22 @@ class LogcatReaderModule : Module() {
     }
 
     val pid = Process.myPid()
+    // Only what is needed to find the app's problems: warnings and errors from
+    // everything (crashes, ExoPlayer / VLC failures, native errors) plus the
+    // info-level events of the player classes. Debug / verbose chatter from
+    // VLC, Exo and the framework is dropped at the source, so a weak TV box no
+    // longer pushes thousands of lines per minute through the JS bridge.
     val cmd = arrayOf(
       "logcat",
       "-v", "threadtime",
       "--pid", pid.toString(),
       "--dividers",
+      "*:W",
+      "ExoPlayerController:I",
+      "VlcPlayerController:I",
+      "PlayerManager:I",
+      "TvPlayerView:I",
+      "TvPlayerService:I",
     )
 
     val proc = Runtime.getRuntime().exec(cmd)

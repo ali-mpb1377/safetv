@@ -13,6 +13,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { ThemedText } from "@/components/ThemedText";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { useTheme } from "@/hooks/useTheme";
 import { useFocusScroll } from "@/hooks/useFocusScroll";
 import { Colors, Spacing } from "@/constants/theme";
@@ -51,6 +52,7 @@ export function TvHomeScreen({ onNavigateTab }: TvHomeScreenProps) {
   }, [playlist, recentChannels]);
 
   const handleChannelPress = (ch: Channel) => {
+    setPlaybackQueue(null); // not opened from a list: next / previous use the whole playlist
     navigation.navigate("Player", { channelId: ch.id });
   };
 

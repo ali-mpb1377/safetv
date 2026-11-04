@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import {
   View,
   StyleSheet,
@@ -6,6 +6,8 @@ import {
   ScrollView,
   Platform,
   type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,6 +20,7 @@ import { usePlaylist } from "@/context/PlaylistContext";
 import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { useTheme } from "@/hooks/useTheme";
 import { useFocusScroll } from "@/hooks/useFocusScroll";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Colors, Spacing } from "@/constants/theme";
 import { createTvPalette } from "./tvPalette";
 import { Channel } from "@/types/playlist";
@@ -25,34 +28,56 @@ import { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 const placeholderImage = require("../../../assets/images/placeholder-channel.png");
 
+/** Result cards drawn per page; more are added as the user scrolls / focuses near the end. */
+const PAGE_SIZE = 40;
+
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export function TvSearchScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { theme } = useTheme();
-  const { playlist } = usePlaylist();
+  const { searchChannels } = usePlaylist();
   const [searchQuery, setSearchQuery] = useState("");
+  // Search while the user pauses typing, not on every key press.
+  const query = useDebouncedValue(searchQuery, 250);
+  const pending = searchQuery.trim() !== query.trim();
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const resultsScroll = useFocusScroll<string>({ axis: "vertical" });
   const styles = useMemo(() => createStyles(theme), [theme]);
   const c = useMemo(() => createTvPalette(theme), [theme]);
 
-  const results = useMemo(() => {
-    if (!playlist || !searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase().trim();
-    // Cap the result list: rendering thousands of rows (each with an image)
-    // is what makes weak TV boxes freeze. Typing more narrows the search.
-    const found: Channel[] = [];
-    for (const ch of playlist.channels) {
+  // ALL matches (the player's next / previous cycle through this whole list)...
+  const matches = useMemo(() => searchChannels(query), [searchChannels, query]);
+  // ...but only a page of them is drawn at a time: rendering thousands of
+  // cards (each with a logo) is what freezes weak TV boxes.
+  const results = useMemo(
+    () => matches.slice(0, visibleCount),
+    [matches, visibleCount],
+  );
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [query]);
+
+  const showMore = useCallback(() => {
+    setVisibleCount((n) =>
+      n >= matches.length ? n : Math.min(matches.length, n + PAGE_SIZE),
+    );
+  }, [matches.length]);
+
+  const handleResultsScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      resultsScroll.onScroll(e);
+      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
       if (
-        ch.name.toLowerCase().includes(q) ||
-        (ch.group && ch.group.toLowerCase().includes(q))
+        contentOffset.y + layoutMeasurement.height >=
+        contentSize.height - 600
       ) {
-        found.push(ch);
-        if (found.length >= 80) break;
+        showMore();
       }
-    }
-    return found;
-  }, [playlist, searchQuery]);
+    },
+    [resultsScroll, showMore],
+  );
 
   return (
     <View style={styles.container}>
@@ -91,8 +116,8 @@ export function TvSearchScreen() {
         contentContainerStyle={styles.resultsGrid}
         showsVerticalScrollIndicator={false}
         onLayout={resultsScroll.onScrollViewLayout}
-        onScroll={resultsScroll.onScroll}
-        scrollEventThrottle={16}
+        onScroll={handleResultsScroll}
+        scrollEventThrottle={64}
       >
         {searchQuery.trim() === "" ? (
           <View style={styles.emptyContainer}>
@@ -100,25 +125,38 @@ export function TvSearchScreen() {
               Type on the keyboard to search channels
             </ThemedText>
           </View>
-        ) : results.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <ThemedText type="body" style={styles.emptyText}>
-              {`No channels found matching "${searchQuery}"`}
-            </ThemedText>
-          </View>
+        ) : matches.length === 0 ? (
+          pending ? null : (
+            <View style={styles.emptyContainer}>
+              <ThemedText type="body" style={styles.emptyText}>
+                {`No channels found matching "${searchQuery}"`}
+              </ThemedText>
+            </View>
+          )
         ) : (
-          results.map((channel) => (
-            <ChannelResultCard
-              key={channel.id}
-              channel={channel}
-              onPress={() => {
-                setPlaybackQueue(results);
-                navigation.navigate("Player", { channelId: channel.id });
-              }}
-              onLayoutItem={(e) => resultsScroll.registerItem(channel.id, e)}
-              onFocused={() => resultsScroll.focusOn(channel.id)}
-            />
-          ))
+          <>
+            <View style={styles.countRow}>
+              <ThemedText type="caption" style={styles.countText}>
+                {`${matches.length} results`}
+              </ThemedText>
+            </View>
+            {results.map((channel, index) => (
+              <ChannelResultCard
+                key={channel.id}
+                channel={channel}
+                onPress={() => {
+                  // Next / previous in the player cycle through ALL results.
+                  setPlaybackQueue(matches, { loop: true });
+                  navigation.navigate("Player", { channelId: channel.id });
+                }}
+                onLayoutItem={(e) => resultsScroll.registerItem(channel.id, e)}
+                onFocused={() => {
+                  resultsScroll.focusOn(channel.id);
+                  if (index >= results.length - 8) showMore();
+                }}
+              />
+            ))}
+          </>
         )}
       </ScrollView>
     </View>
@@ -259,6 +297,12 @@ function createStyles(theme: typeof Colors.dark) {
       width: "100%",
     },
     emptyText: {
+      color: c.text50,
+    },
+    countRow: {
+      width: "100%",
+    },
+    countText: {
       color: c.text50,
     },
   });

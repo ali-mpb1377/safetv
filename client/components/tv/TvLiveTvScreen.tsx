@@ -254,10 +254,11 @@ export function TvLiveTvScreen({
       setSelectedChannelId(ch.id);
       // Next / previous in the player follow what is shown here (category,
       // search...), not the whole playlist.
-      setPlaybackQueue(filteredChannels);
+      // A channel search result keeps cycling inside itself.
+      setPlaybackQueue(filteredChannels, { loop: channelSearch.trim() !== "" });
       onChannelPress(ch);
     },
-    [onChannelPress, filteredChannels],
+    [onChannelPress, filteredChannels, channelSearch],
   );
 
   // EPG details for the active banner channel

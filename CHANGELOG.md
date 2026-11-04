@@ -7,6 +7,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.0] — 2026-11-04
+
+Performance and stability release for weak TV boxes.
+
+### Improved
+- **Search** — Persian / Arabic letter variants and digits are matched as the
+  same (ی/ي، ک/ك، ۱/١...), several words can be typed in any order, results
+  appear after you pause typing, and only 40 cards are drawn at a time (more
+  load as you scroll). The player's next / previous cycle through the whole
+  result list.
+- **Memory** — more Java heap for the app (`largeHeap`), ExoPlayer read-ahead
+  limited to 15–30 s / 32 MB, and ExoPlayer falls back to another decoder if a
+  hardware decoder fails to start.
+- **Logs** — only warnings, errors and player events are captured, so a weak
+  box no longer pushes thousands of log lines per minute through the app.
+- **Server requests** — the channel list gets 45 s, and the time limit now also
+  covers reading the answer, so a stalled connection can never hang the app.
+- **Build** — the GitHub workflow frees disk space and cleans the npm cache
+  before installing.
+
+---
+
 ## [1.7.5] — 2026-10-29
 
 ### Fixed
@@ -195,6 +217,7 @@ First SafeTV release, by [ali-mpb1377](https://github.com/ali-mpb1377).
   favorites, adaptive streaming (HLS/DASH/MSS), quality selection, and the
   Android TV remote experience.
 
+[1.8.0]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.8.0
 [1.7.5]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.5
 [1.7.4]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.4
 [1.7.3]: https://github.com/ali-mpb1377/safetv/releases/tag/v1.7.3

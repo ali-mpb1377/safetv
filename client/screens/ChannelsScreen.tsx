@@ -38,6 +38,7 @@ import { EpgGuideView } from "@/components/EpgGuideView";
 import { EmptyState } from "@/components/EmptyState";
 import { MiniPreviewPlayer } from "@/components/MiniPreviewPlayer";
 import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { usePlaylist } from "@/context/PlaylistContext";
 import { useEpg } from "@/context/EpgContext";
@@ -261,8 +262,14 @@ export default function ChannelsScreen({
   // above the list instead.
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const sideBySide = winWidth > winHeight && winWidth >= 600;
+  // The list being shown (category / search), read by the player's next / previous.
+  const queueRef = useRef<{ channels: Channel[]; loop: boolean }>({
+    channels: [],
+    loop: false,
+  });
+  const getQueue = useCallback(() => queueRef.current, []);
   const { previewChannel, onChannelPress, openPreviewFullscreen } =
-    useChannelPressFlow();
+    useChannelPressFlow(getQueue);
   const onChannelPressRef = useRef(onChannelPress);
   onChannelPressRef.current = onChannelPress;
   const listPaneWidth = sideBySide
@@ -365,6 +372,10 @@ export default function ChannelsScreen({
 
     return playlist.channels;
   }, [playlist, debouncedSearchQuery, selectedCategory, searchChannels]);
+  queueRef.current = {
+    channels: filteredChannels,
+    loop: debouncedSearchQuery.trim() !== "", // a search result cycles inside itself
+  };
 
   const openDrawer = useCallback(() => {
     setDrawerOpen(true);
@@ -741,9 +752,12 @@ export default function ChannelsScreen({
           <EpgGuideView
             channels={filteredChannels}
             getProgramsForChannel={epg.getProgramsForChannel}
-            onSelectChannel={(id) =>
-              navigation.navigate("Player", { channelId: id })
-            }
+            onSelectChannel={(id) => {
+              setPlaybackQueue(queueRef.current.channels, {
+                loop: queueRef.current.loop,
+              });
+              navigation.navigate("Player", { channelId: id });
+            }}
           />
         ) : (
           <FlashList<Channel>

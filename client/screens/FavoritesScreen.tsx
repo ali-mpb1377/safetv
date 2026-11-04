@@ -19,6 +19,7 @@ import { ChannelCardHorizontal } from "@/components/ChannelCardHorizontal";
 import { EmptyState } from "@/components/EmptyState";
 import { TVFocusablePressable } from "@/components/TVFocusablePressable";
 import { usePlaylist } from "@/context/PlaylistContext";
+import { setPlaybackQueue } from "@/lib/playbackQueue";
 import { useResponsive } from "@/hooks/useResponsive";
 import { useTheme } from "@/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/constants/theme";
@@ -147,6 +148,9 @@ export default function FavoritesScreen() {
     setSearchQuery(query);
   }, []);
 
+  // The list being shown, read by the player's next / previous.
+  const queueRef = useRef<Channel[]>([]);
+  queueRef.current = filteredChannels;
   const channelPressHandlers = useRef(new Map<string, () => void>()).current;
   const favoritePressHandlers = useRef(new Map<string, () => void>()).current;
   const longPressHandlers = useRef(new Map<string, () => void>()).current;
@@ -155,12 +159,15 @@ export default function FavoritesScreen() {
     (channelId: string) => {
       let handler = channelPressHandlers.get(channelId);
       if (!handler) {
-        handler = () => navigation.navigate("Player", { channelId });
+        handler = () => {
+          setPlaybackQueue(queueRef.current);
+          navigation.navigate("Player", { channelId });
+        };
         channelPressHandlers.set(channelId, handler);
       }
       return handler;
     },
-    [navigation, channelPressHandlers],
+    [navigation, channelPressHandlers, queueRef],
   );
 
   const getFavoritePressHandler = useCallback(

@@ -22,6 +22,7 @@ import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
@@ -773,6 +774,23 @@ class ExoPlayerController(
 
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            // If a hardware decoder fails to start, try the next one instead of
+            // failing the channel (common on cheap TV boxes).
+            .setEnableDecoderFallback(true)
+
+        // Live IPTV does not need Exo's default ~50 s read-ahead: on 1 GB TV boxes
+        // it only burns RAM. A 15-30 s window plus a hard 32 MB cap keeps memory
+        // flat; playback still starts after 2.5 s and resumes after 5 s rebuffer.
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 30_000,
+                /* bufferForPlaybackMs = */ 2_500,
+                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
+            )
+            .setTargetBufferBytes(32 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .build()
 
         val trackSelector = DefaultTrackSelector(context).apply {
             setParameters(
@@ -788,6 +806,7 @@ class ExoPlayerController(
         val player = ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
             .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             // handleAudioFocus=true: pause on calls/transient loss, resume on
             // gain — standard music-app behaviour for the system media UI.

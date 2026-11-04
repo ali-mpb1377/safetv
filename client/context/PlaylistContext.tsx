@@ -11,6 +11,7 @@ import React, {
 import { AppState, AppStateStatus } from "react-native";
 import { Channel, Playlist } from "@/types/playlist";
 import * as storage from "@/lib/storage";
+import { buildSearchIndex, searchIndexed } from "@/lib/search";
 import {
   parseM3U,
   fetchAndParseM3U,
@@ -548,17 +549,18 @@ export function PlaylistProvider({ children }: { children: ReactNode }) {
     );
   }, [playlist, favoriteCategories]);
 
+  // Lower-cased / normalised "name + group" per channel, built once per playlist.
+  const searchIndex = useMemo(
+    () => (playlist ? buildSearchIndex(playlist.channels) : []),
+    [playlist],
+  );
+
   const searchChannels = useCallback(
     (query: string): Channel[] => {
       if (!playlist || !query.trim()) return [];
-      const lowerQuery = query.toLowerCase();
-      return playlist.channels.filter(
-        (ch) =>
-          ch.name.toLowerCase().includes(lowerQuery) ||
-          ch.group.toLowerCase().includes(lowerQuery),
-      );
+      return searchIndexed(playlist.channels, searchIndex, query);
     },
-    [playlist],
+    [playlist, searchIndex],
   );
 
   return (

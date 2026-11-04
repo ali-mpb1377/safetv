@@ -72,6 +72,8 @@ function withTvPlayer(config) {
     // Service declaration inside <application>
     const application = manifest.application?.[0];
     if (application) {
+      // More Java heap for big channel lists + logos on low-RAM TV boxes.
+      application.$["android:largeHeap"] = "true";
       if (!application.service) application.service = [];
       const serviceNames = application.service.map(
         (s) => s.$?.["android:name"],

@@ -8,8 +8,10 @@ import { getDeviceId } from "@/lib/deviceId";
 export const BASE_URL = "https://it.web-gaming.ir";
 const SERVER_HOST = "it.web-gaming.ir";
 const REQUEST_TIMEOUT_MS = 20000;
+/** The channel list is the biggest answer; give slow links more time. */
+const CHANNELS_TIMEOUT_MS = 45000;
 
-export const APP_VERSION = "1.7.5";
+export const APP_VERSION = "1.8.0";
 
 export type AccountStatus = "active" | "expired" | "suspended";
 
@@ -64,45 +66,63 @@ const FALLBACK_MESSAGES: Record<string, string> = {
 
 async function request<T>(
   path: string,
-  opts: { method?: "GET" | "POST"; body?: unknown; token?: string } = {},
+  opts: {
+    method?: "GET" | "POST";
+    body?: unknown;
+    token?: string;
+    /** Whole-request limit (connect + download + parse). Default 20 s. */
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let res: Response;
+  const timer = setTimeout(
+    () => controller.abort(),
+    opts.timeoutMs ?? REQUEST_TIMEOUT_MS,
+  );
+  // The timer stays armed until the body has been read too, so a server that
+  // stalls halfway through an answer can never leave the app waiting forever.
   try {
-    res = await fetch(BASE_URL + path, {
-      method: opts.method ?? "GET",
-      headers: {
-        Accept: "application/json",
-        ...(opts.body ? { "Content-Type": "application/json" } : {}),
-        ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
-      },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-      signal: controller.signal,
-    });
-  } catch {
-    throw new ApiError("network", FALLBACK_MESSAGES.network);
+    let res: Response;
+    try {
+      res = await fetch(BASE_URL + path, {
+        method: opts.method ?? "GET",
+        headers: {
+          Accept: "application/json",
+          ...(opts.body ? { "Content-Type": "application/json" } : {}),
+          ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+        },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+    } catch {
+      throw new ApiError("network", FALLBACK_MESSAGES.network);
+    }
+
+    let json: any = null;
+    try {
+      json = await res.json();
+    } catch {
+      json = null;
+    }
+
+    if (!res.ok) {
+      const code: string = json?.error || `http_${res.status}`;
+      throw new ApiError(
+        code,
+        json?.message || FALLBACK_MESSAGES[code] || "خطای ناشناخته از سرور.",
+        res.status,
+        { retryAfter: json?.retry_after, max: json?.max },
+      );
+    }
+    // Cut off by the timeout while reading the answer: report it as a network
+    // error instead of handing `null` to code that expects an object.
+    if (json == null && controller.signal.aborted) {
+      throw new ApiError("network", FALLBACK_MESSAGES.network);
+    }
+    return json as T;
   } finally {
     clearTimeout(timer);
   }
-
-  let json: any = null;
-  try {
-    json = await res.json();
-  } catch {
-    json = null;
-  }
-
-  if (!res.ok) {
-    const code: string = json?.error || `http_${res.status}`;
-    throw new ApiError(
-      code,
-      json?.message || FALLBACK_MESSAGES[code] || "خطای ناشناخته از سرور.",
-      res.status,
-      { retryAfter: json?.retry_after, max: json?.max },
-    );
-  }
-  return json as T;
 }
 
 function parseAccount(j: any): AccountInfo {
@@ -188,7 +208,7 @@ export async function apiChannels(token: string): Promise<Playlist> {
   const j = await request<{
     groups?: { name: string; count: number }[];
     channels: ServerChannel[];
-  }>("/app/v1/channels", { token });
+  }>("/app/v1/channels", { token, timeoutMs: CHANNELS_TIMEOUT_MS });
 
   const channels: Channel[] = (j.channels ?? []).map((c) => ({
     id: String(c.id),
