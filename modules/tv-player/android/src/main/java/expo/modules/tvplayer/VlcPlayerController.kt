@@ -109,6 +109,16 @@ class VlcPlayerController(
 
     companion object {
         private const val TAG = "VlcPlayerController"
+
+        // libVLC's stop() / release() block until its network layer gives up on a
+        // stream that is still opening or has stalled (several seconds for a dead
+        // channel). They run on this pool and NEVER on the main thread: blocking
+        // the main thread while the user leaves a dead channel is what made Android
+        // show "app not responding".
+        private val teardownPool: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newFixedThreadPool(3) { r ->
+                Thread(r, "vlc-teardown").apply { isDaemon = true }
+            }
     }
 
     override fun setCallbacks(callbacks: PlayerController.Callbacks) {
@@ -761,7 +771,11 @@ class VlcPlayerController(
 
     // ── release() ────────────────────────────────────────────────────────────
     //
-    // Release order is critical for thread safety:
+    // Release order is critical for thread safety. Steps 1-7 (quick, surface
+    // related) run on the calling thread; the blocking native stop()/release()
+    // (steps 8-9) run on teardownPool so a dead or stalled stream can never
+    // freeze the UI. Video output is detached BEFORE stop(), exactly like
+    // surfaceDestroyed() already does while a stream is playing.
     //
     // 1. if (released) return — idempotent, prevents double-release.
     //
@@ -809,54 +823,51 @@ class VlcPlayerController(
         // released VLC objects (FIX #3, #4)
         removeAllListeners()
 
-        // Step 3: Null the VLC event listener to stop VLC native thread callbacks
+        // Step 3: Null references before native teardown
         val player = mediaPlayer
         val vlcLib = libVLC
-
-        // Step 4: Null references before native teardown
         mediaPlayer = null
         libVLC = null
 
-        // Step 5: Capture position before teardown
+        // Step 4: Capture position before teardown
         savedPosition = try { player?.time ?: 0L } catch (_: Exception) { 0L }
 
+        // Step 5 (quick): stop VLC callbacks and detach the video output so the
+        // native render thread can never draw into a destroyed surface. Idempotent
+        // when surfaceDestroyed() already detached the views (FIX #1).
         try {
-            player?.let {
-                // Null event listener FIRST — stop() fires Stopped events on
-                // VLC's native thread. Without nulling, those events access
-                // MediaPlayer properties during teardown.
-                it.setEventListener(null)
-
-                // Stop playback — triggers VLC to halt its internal decode/render loops
-                it.stop()
-
-                // Detach video output from surfaces. May already be detached
-                // by surfaceDestroyed() (FIX #1). detachViews() is idempotent
-                // when views are already detached.
-                try {
-                    it.vlcVout?.detachViews()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error during detachViews in release: ${e.message}")
-                }
-
-                // Release native MediaPlayer — frees all VLC internal resources
-                it.release()
-            }
+            player?.setEventListener(null)
+            player?.vlcVout?.detachViews()
         } catch (e: Throwable) {
-            // Catch Throwable (not Exception) because VLC can throw native errors
-            // that extend Error, not Exception. Swallowing prevents crashes from
-            // propagating to the React Native bridge.
-            Log.e(TAG, "Error releasing VLC MediaPlayer: ${e.message}", e)
+            // Throwable, not Exception: VLC can throw native errors that extend Error.
+            Log.w(TAG, "Error detaching VLC output in release: ${e.message}")
         }
 
-        try {
-            vlcLib?.release()
-        } catch (e: Throwable) {
-            Log.e(TAG, "Error releasing LibVLC: ${e.message}", e)
+        // Step 6 (background): stop() waits for VLC's network layer, so it must not
+        // run on the main thread. release() calls follow in the same order as before:
+        // MediaPlayer first, LibVLC last (the player holds a reference to it).
+        if (player != null || vlcLib != null) {
+            teardownPool.execute {
+                try {
+                    player?.stop()
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Error stopping VLC MediaPlayer: ${e.message}")
+                }
+                try {
+                    player?.release()
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Error releasing VLC MediaPlayer: ${e.message}", e)
+                }
+                try {
+                    vlcLib?.release()
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Error releasing LibVLC: ${e.message}", e)
+                }
+            }
         }
 
         if (!silent) {
-            Log.d(TAG, "VLC player released, saved position: $savedPosition")
+            Log.d(TAG, "VLC player released (teardown in background), saved position: $savedPosition")
         }
     }
 

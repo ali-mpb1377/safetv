@@ -7,6 +7,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.2] — 2026-11-04
+
+### Fixed
+- "App not responding" when leaving a dead or black-screen channel to go to
+  another one. VLC was being stopped on the main thread, and stopping blocks
+  for several seconds while VLC is still trying to connect to a dead stream.
+  VLC now detaches the picture right away and finishes closing in the
+  background.
+- Pressing next / previous faster than the player can close the old channel
+  (key repeat, double press) is ignored for 0.7 s instead of stacking switches.
+
+### Changed
+- ExoPlayer no longer switches to another decoder on its own (added in 1.8.0).
+  A channel whose hardware decoder cannot start reports the error again, so
+  the player can fall back to VLC as it did before 1.8.0.
+
+### Added
+- **In-app updates are back** (Settings → Check for updates). The app reads the
+  latest release of this repository on GitHub, downloads the APK of the same
+  kind that is installed (arm64-v8a, armeabi-v7a, x86, x86_64 or universal) and
+  then opens the system installer. Needs a public repository.
+
+---
+
 ## [1.8.1] — 2026-11-04
 
 ### Fixed

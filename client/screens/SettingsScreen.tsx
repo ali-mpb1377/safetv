@@ -155,9 +155,9 @@ const PLAYER_ENGINE_OPTIONS = [
   },
 ];
 
-// Update checking is hidden for now. Set to true to bring the row, the
-// background check and the update dialog back.
-const SHOW_UPDATE_CHECK = false;
+// In-app updates (from the GitHub releases of this repository). Set to false
+// to hide the row, the background check and the update dialog.
+const SHOW_UPDATE_CHECK = true;
 
 export default function SettingsScreen({
   embedded = false,

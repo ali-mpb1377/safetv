@@ -50,3 +50,20 @@ export function stepChannel<T extends { id: string }>(
   if (i < list.length - 1) return list[i + 1];
   return wrap ? list[0] : null;
 }
+
+/**
+ * Guard against zapping faster than the player can tear down and build up:
+ * every channel change creates a new native player and has to close the old
+ * one, which takes a moment (longer while the old channel is still trying to
+ * connect). Returns false when the previous switch was less than `minGapMs`
+ * ago; the caller should then ignore the key press.
+ */
+let lastSwitchAt = 0;
+export function allowChannelSwitch(
+  now: number = Date.now(),
+  minGapMs: number = 700,
+): boolean {
+  if (now - lastSwitchAt < minGapMs) return false;
+  lastSwitchAt = now;
+  return true;
+}

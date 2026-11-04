@@ -221,6 +221,21 @@ TvPlayerView.displayName = "TvPlayerView";
 // ── Module-level functions ────────────────────────────────────────────────────
 
 /**
+ * CPU ABIs inside the installed APK (one = per-ABI build, several = universal).
+ * Empty when the native module is unavailable.
+ */
+export async function getApkAbisNative(): Promise<string[]> {
+  if (!TvPlayerModule || typeof TvPlayerModule.getApkAbis !== "function") {
+    return [];
+  }
+  try {
+    return (await TvPlayerModule.getApkAbis()) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Fetches playlist content using native OkHttp (bypasses RN fetch limitations
  * with User-Agent headers on Android). Returns { success, error, content }.
  */

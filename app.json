@@ -2,7 +2,7 @@
   "expo": {
     "name": "SafeTV",
     "slug": "prysm",
-    "version": "1.8.1",
+    "version": "1.8.2",
     "orientation": "landscape",
     "icon": "./assets/images/icon.png",
     "scheme": "prysmplayer",
@@ -22,7 +22,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.prysmplayer.app",
-      "versionCode": 10801,
+      "versionCode": 10802,
       "jsEngine": "hermes",
       "permissions": [
         "REQUEST_INSTALL_PACKAGES"

@@ -27,6 +27,7 @@ import {
   getPlaybackQueue,
   isPlaybackQueueLooping,
   stepChannel,
+  allowChannelSwitch,
 } from "@/lib/playbackQueue";
 import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
@@ -207,6 +208,9 @@ export default function PlayerScreen() {
 
       const newChannel = stepChannel(list, channelId, direction, wrap);
       if (!newChannel) return;
+      // Ignore key repeats / double presses: each switch builds a new native
+      // player and has to close the old one first.
+      if (!allowChannelSwitch()) return;
       if (!isTV) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       navigation.replace("Player", { channelId: newChannel.id });
     },

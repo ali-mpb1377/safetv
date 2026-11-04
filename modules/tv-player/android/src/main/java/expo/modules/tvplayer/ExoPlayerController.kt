@@ -774,9 +774,6 @@ class ExoPlayerController(
 
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            // If a hardware decoder fails to start, try the next one instead of
-            // failing the channel (common on cheap TV boxes).
-            .setEnableDecoderFallback(true)
 
         // Live IPTV does not need Exo's default ~50 s read-ahead: on 1 GB TV boxes
         // it only burns RAM. A 15-30 s window plus a hard 32 MB cap keeps memory

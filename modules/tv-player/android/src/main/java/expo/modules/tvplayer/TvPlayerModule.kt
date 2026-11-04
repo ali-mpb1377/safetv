@@ -77,6 +77,33 @@ class TvPlayerModule : Module() {
             }
         }
 
+        // CPU ABIs that the installed APK actually contains (lib/<abi>/...).
+        // One ABI = a per-ABI build, several = the universal build. The updater
+        // uses this to download the same kind of APK that is installed.
+        AsyncFunction("getApkAbis") {
+            val ctx = appContext.reactContext
+            if (ctx == null) {
+                emptyList<String>()
+            } else {
+                try {
+                    java.util.zip.ZipFile(ctx.applicationInfo.sourceDir).use { zip ->
+                        val abis = mutableSetOf<String>()
+                        val entries = zip.entries()
+                        while (entries.hasMoreElements()) {
+                            val name = entries.nextElement().name
+                            if (name.startsWith("lib/")) {
+                                val parts = name.split("/")
+                                if (parts.size >= 3) abis.add(parts[1])
+                            }
+                        }
+                        abis.toList()
+                    }
+                } catch (e: Exception) {
+                    emptyList<String>()
+                }
+            }
+        }
+
         // ── View ────────────────────────────────────────────────────────────
         View(TvPlayerView::class) {
 
