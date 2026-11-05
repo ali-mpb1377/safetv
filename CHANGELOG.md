@@ -7,6 +7,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.3] — 2026-11-04
+
+### Fixed
+- The release build failed at the packaging step (`packageRelease`,
+  "Multiple task action failures") because Gradle ran out of memory
+  (2 GiB heap / 512 MiB metaspace). The build now gets 4 GiB / 1.5 GiB and
+  uses two workers, set by the new `plugins/withGradleMemory.js` so it applies
+  to every build.
+- VLC: after leaving a dead channel, the channel you had just left could keep
+  playing its sound in the background. Old players are now muted at once and
+  every old player is shut down on its own thread, so one dead channel can no
+  longer delay the shutdown of the others.
+
+---
+
 ## [1.8.2] — 2026-11-04
 
 ### Fixed

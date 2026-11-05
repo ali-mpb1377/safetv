@@ -115,8 +115,14 @@ class VlcPlayerController(
         // channel). They run on this pool and NEVER on the main thread: blocking
         // the main thread while the user leaves a dead channel is what made Android
         // show "app not responding".
+        //
+        // The pool must NOT have a fixed size. With a small fixed pool, a few dead
+        // channels in a row keep every thread busy inside stop(); the teardown of
+        // the NEXT (working) channel then waits in the queue and that channel keeps
+        // playing its audio in the background. A cached pool gives every teardown
+        // its own thread immediately, so a dead channel can only ever block itself.
         private val teardownPool: java.util.concurrent.ExecutorService =
-            java.util.concurrent.Executors.newFixedThreadPool(3) { r ->
+            java.util.concurrent.Executors.newCachedThreadPool { r ->
                 Thread(r, "vlc-teardown").apply { isDaemon = true }
             }
     }
@@ -841,6 +847,15 @@ class VlcPlayerController(
         } catch (e: Throwable) {
             // Throwable, not Exception: VLC can throw native errors that extend Error.
             Log.w(TAG, "Error detaching VLC output in release: ${e.message}")
+        }
+
+        // Silence the old stream right now. Detaching the video does not stop the
+        // audio, and stop() below can take a while, so without this the channel the
+        // user just left can still be heard until the teardown finishes.
+        try {
+            player?.volume = 0
+        } catch (e: Throwable) {
+            Log.w(TAG, "Error muting VLC player in release: ${e.message}")
         }
 
         // Step 6 (background): stop() waits for VLC's network layer, so it must not

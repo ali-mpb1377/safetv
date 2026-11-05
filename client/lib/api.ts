@@ -11,7 +11,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 /** The channel list is the biggest answer; give slow links more time. */
 const CHANNELS_TIMEOUT_MS = 45000;
 
-export const APP_VERSION = "1.8.2";
+export const APP_VERSION = "1.8.3";
 
 export type AccountStatus = "active" | "expired" | "suspended";
 
