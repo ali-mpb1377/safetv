@@ -7,6 +7,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.4] — 2026-11-05
+
+### Fixed
+- VLC: after leaving a dead channel, the channel you had just left could keep
+  playing its sound in the background. Old players are now muted at once and
+  every old player is shut down on its own thread, so one dead channel can no
+  longer delay the shutdown of the others.
+- In-app update: the download is now checked (HTTP status, size from the
+  release, APK signature) so an error page can no longer be saved as the APK;
+  the app asks for "Install unknown apps" before opening the installer and
+  keeps the downloaded file for the second try; if the installer closes without
+  installing, a message explains why. The dialog shows the installed build and
+  the update build (for example arm64-v8a → arm64-v8a).
+
+---
+
 ## [1.8.3] — 2026-11-04
 
 ### Fixed
@@ -15,10 +31,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
   (2 GiB heap / 512 MiB metaspace). The build now gets 4 GiB / 1.5 GiB and
   uses two workers, set by the new `plugins/withGradleMemory.js` so it applies
   to every build.
-- VLC: after leaving a dead channel, the channel you had just left could keep
-  playing its sound in the background. Old players are now muted at once and
-  every old player is shut down on its own thread, so one dead channel can no
-  longer delay the shutdown of the others.
 
 ---
 

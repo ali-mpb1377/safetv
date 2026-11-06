@@ -17,6 +17,8 @@ export interface UpdateInfo {
   apkUrl: string;
   /** Which build is installed / will be downloaded (arm64-v8a, universal ...). */
   variant?: string;
+  /** Size of the APK in bytes, from the release (used to verify the download). */
+  apkSize?: number;
 }
 
 const VARIANT_RE = /-(arm64-v8a|armeabi-v7a|x86_64|x86|universal)\.apk$/i;
@@ -107,6 +109,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
         releaseNotes,
         apkUrl: apkAsset.browser_download_url,
         variant: variantOf(apkAsset.name) ?? undefined,
+        apkSize: typeof apkAsset.size === "number" ? apkAsset.size : undefined,
       };
     }
 
@@ -123,35 +126,81 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   }
 }
 
+/**
+ * Downloads the APK and checks it really is the APK:
+ *  - the server must answer 200 (a 403/404 page would otherwise be saved as
+ *    "safetv-update.apk" and the installer would just refuse it),
+ *  - the size must match the release asset,
+ *  - the file must start with the ZIP signature ("PK").
+ * Throws an Error with a readable message when something is wrong.
+ */
 export async function downloadApk(
   apkUrl: string,
   onProgress?: (progress: number) => void,
-): Promise<string | null> {
+  expectedSize?: number,
+): Promise<string> {
   if (Platform.OS !== "android" || !APK_DOWNLOAD_DIR) {
-    return null;
+    throw new Error("Updates are only available on Android");
   }
 
+  const apkPath = `${APK_DOWNLOAD_DIR}safetv-update.apk`;
+
+  const downloadResumable = FileSystemLegacy.createDownloadResumable(
+    apkUrl,
+    apkPath,
+    {},
+    (downloadProgress) => {
+      if (onProgress && downloadProgress.totalBytesExpectedToWrite > 0) {
+        onProgress(
+          downloadProgress.totalBytesWritten /
+            downloadProgress.totalBytesExpectedToWrite,
+        );
+      }
+    },
+  );
+
+  const result = await downloadResumable.downloadAsync();
+  if (!result?.uri) throw new Error("Download failed");
+  if (result.status < 200 || result.status >= 300) {
+    await clearDownloadedApk();
+    throw new Error(`Download failed (HTTP ${result.status})`);
+  }
+
+  const problem = await checkApkFile(result.uri, expectedSize);
+  if (problem) {
+    await clearDownloadedApk();
+    throw new Error(problem);
+  }
+  return result.uri;
+}
+
+/** Returns a problem description, or null when the file looks like the APK. */
+export async function checkApkFile(
+  uri: string,
+  expectedSize?: number,
+): Promise<string | null> {
   try {
-    const apkPath = `${APK_DOWNLOAD_DIR}safetv-update.apk`;
-
-    const downloadResumable = FileSystemLegacy.createDownloadResumable(
-      apkUrl,
-      apkPath,
-      {},
-      (downloadProgress) => {
-        if (onProgress && downloadProgress.totalBytesExpectedToWrite > 0) {
-          const progress =
-            downloadProgress.totalBytesWritten /
-            downloadProgress.totalBytesExpectedToWrite;
-          onProgress(progress);
-        }
-      },
-    );
-
-    const result = await downloadResumable.downloadAsync();
-    return result?.uri || null;
-  } catch (error) {
-    console.error("Error downloading APK:", error);
+    const info = await FileSystemLegacy.getInfoAsync(uri);
+    if (!info.exists) return "The downloaded file is missing";
+    const size = (info as { size?: number }).size;
+    if (expectedSize && typeof size === "number" && size !== expectedSize) {
+      return `The download is incomplete (${size} of ${expectedSize} bytes)`;
+    }
+    try {
+      const head = await FileSystemLegacy.readAsStringAsync(uri, {
+        encoding: FileSystemLegacy.EncodingType.Base64,
+        position: 0,
+        length: 4,
+      });
+      // "PK\u0003\u0004" in base64 starts with "UEsD".
+      if (!head.startsWith("UEs")) {
+        return "The downloaded file is not an APK";
+      }
+    } catch {
+      // Cannot read the header: rely on the size check above.
+    }
+    return null;
+  } catch {
     return null;
   }
 }

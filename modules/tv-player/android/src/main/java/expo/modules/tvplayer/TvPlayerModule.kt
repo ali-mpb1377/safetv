@@ -77,6 +77,17 @@ class TvPlayerModule : Module() {
             }
         }
 
+        // Android 8+ only lets an app open the system installer after the user
+        // allowed "Install unknown apps" for it. The updater checks this first.
+        AsyncFunction("canInstallPackages") {
+            val ctx = appContext.reactContext
+            if (ctx == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
+                true
+            } else {
+                ctx.packageManager.canRequestPackageInstalls()
+            }
+        }
+
         // CPU ABIs that the installed APK actually contains (lib/<abi>/...).
         // One ABI = a per-ABI build, several = the universal build. The updater
         // uses this to download the same kind of APK that is installed.

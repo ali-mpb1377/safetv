@@ -41,11 +41,14 @@ import { CategoryVisibility } from "@/components/settings/CategoryVisibility";
 import {
   checkForUpdate,
   downloadApk,
+  checkApkFile,
+  getInstalledVariant,
   getDownloadedApkPath,
   clearDownloadedApk,
   getApkContentUri,
   UpdateInfo,
 } from "@/utils/updateChecker";
+import { canInstallPackagesNative } from "../../modules/tv-player/src/index";
 import * as FileSystemLegacy from "expo-file-system/legacy";
 
 type SettingsNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -217,6 +220,8 @@ export default function SettingsScreen({
   const [downloadingApk, setDownloadingApk] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [installingApk, setInstallingApk] = useState(false);
+  const [readyApkPath, setReadyApkPath] = useState<string | null>(null);
+  const [installedVariant, setInstalledVariant] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
@@ -247,24 +252,12 @@ export default function SettingsScreen({
     };
     initializeUpdateCheck();
 
-    // Listen for app state changes to handle install result
+    // Back from the system installer. If this app is still running, the
+    // install did not replace it (cancelled or refused), so keep the dialog
+    // open; the message is set by handleDownloadAndInstall.
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       if (nextAppState === "active" && installingApk) {
-        // App returned to foreground after installer
         setInstallingApk(false);
-        setShowUpdateModal(false);
-        // Re-check for updates to see if version changed
-        checkForUpdate().then((info) => {
-          if (info) {
-            setUpdateInfo(info);
-            if (!info.available) {
-              Alert.alert(
-                "Update Successful",
-                "App has been updated to the latest version.",
-              );
-            }
-          }
-        });
       }
     };
 
@@ -497,22 +490,44 @@ export default function SettingsScreen({
     if (!updateInfo?.apkUrl) return;
     if (!isTV)
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setDownloadingApk(true);
-    setDownloadProgress(0);
     setUpdateError(null);
     try {
-      // Clean up any old APK first
-      await clearDownloadedApk();
-
-      const apkPath = await downloadApk(updateInfo.apkUrl, (progress) => {
-        setDownloadProgress(Math.round(progress * 100));
-      });
-      if (!apkPath) {
-        setUpdateError("Failed to download update");
-        return;
+      // Re-use the file from a previous try (for example after the user
+      // allowed "Install unknown apps") instead of downloading again.
+      let apkPath = readyApkPath;
+      if (apkPath && (await checkApkFile(apkPath, updateInfo.apkSize))) {
+        apkPath = null;
       }
-      setDownloadingApk(false);
-      setInstallingApk(true);
+      if (!apkPath) {
+        setDownloadingApk(true);
+        setDownloadProgress(0);
+        await clearDownloadedApk();
+        apkPath = await downloadApk(
+          updateInfo.apkUrl,
+          (progress) => setDownloadProgress(Math.round(progress * 100)),
+          updateInfo.apkSize,
+        );
+        setReadyApkPath(apkPath);
+        setDownloadingApk(false);
+      }
+
+      // Android 8+: the user must allow installs from this app first.
+      if (Platform.OS === "android" && !(await canInstallPackagesNative())) {
+        try {
+          await IntentLauncher.startActivityAsync(
+            "android.settings.MANAGE_UNKNOWN_APP_SOURCES",
+            { data: `package:${Application.applicationId}` },
+          );
+        } catch {
+          // No such settings screen on this device: the installer will ask.
+        }
+        if (!(await canInstallPackagesNative())) {
+          setUpdateError(
+            "Allow SafeTV to install apps in the screen that just opened, then press Install again.",
+          );
+          return;
+        }
+      }
 
       const contentUri = await getApkContentUri(apkPath);
       if (!contentUri) {
@@ -520,18 +535,21 @@ export default function SettingsScreen({
         return;
       }
 
-      // Use modern intent action for Android 10+
+      setInstallingApk(true);
       await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
         data: contentUri,
         type: "application/vnd.android.package-archive",
         flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
       });
 
-      // Clean up the APK after successful install launch
-      await clearDownloadedApk();
-    } catch (error) {
-      console.error("Error installing update:", error);
-      setUpdateError("Failed to install update");
+      // A successful install replaces and restarts the app, so reaching this
+      // line means the installer was closed without installing.
+      setUpdateError(
+        "The installation did not finish. If Android said \"App not installed\", the update is signed with a different key than the installed app: uninstall SafeTV once and install the new APK.",
+      );
+    } catch (error: any) {
+      console.error("Error installing update");
+      setUpdateError(error?.message || "Failed to install update");
     } finally {
       setDownloadingApk(false);
       setInstallingApk(false);
@@ -544,6 +562,8 @@ export default function SettingsScreen({
     setDownloadProgress(0);
     // Clean up any old APKs when opening the modal
     await clearDownloadedApk();
+    setReadyApkPath(null);
+    getInstalledVariant().then(setInstalledVariant);
     setShowUpdateModal(true);
   };
 
@@ -552,6 +572,7 @@ export default function SettingsScreen({
     setShowUpdateModal(false);
     // Clean up APK when closing modal
     await clearDownloadedApk();
+    setReadyApkPath(null);
   };
 
   const getQualityLabel = () => {
@@ -1613,6 +1634,20 @@ export default function SettingsScreen({
             </View>
             <ThemedText type="h4" style={styles.modalTitle}>
               Update to v{updateInfo?.latestVersion}
+            </ThemedText>
+            <ThemedText
+              type="small"
+              style={{
+                color: theme.textSecondary,
+                textAlign: "center",
+                marginBottom: Spacing.sm,
+              }}
+            >
+              {`Installed: ${installedVariant ?? "?"}  →  Update: ${updateInfo?.variant ?? "?"}${
+                updateInfo?.apkSize
+                  ? `  ·  ${(updateInfo.apkSize / 1048576).toFixed(1)} MB`
+                  : ""
+              }`}
             </ThemedText>
             {updateInfo?.releaseNotes && (
               <ScrollView

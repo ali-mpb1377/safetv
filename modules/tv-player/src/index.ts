@@ -221,6 +221,21 @@ TvPlayerView.displayName = "TvPlayerView";
 // ── Module-level functions ────────────────────────────────────────────────────
 
 /**
+ * Whether the user has allowed this app to install APK files
+ * ("Install unknown apps"). Android 7 and older always allow it.
+ */
+export async function canInstallPackagesNative(): Promise<boolean> {
+  if (!TvPlayerModule || typeof TvPlayerModule.canInstallPackages !== "function") {
+    return true; // unknown: let the system installer decide
+  }
+  try {
+    return (await TvPlayerModule.canInstallPackages()) !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * CPU ABIs inside the installed APK (one = per-ABI build, several = universal).
  * Empty when the native module is unavailable.
  */
