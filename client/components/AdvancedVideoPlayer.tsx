@@ -1344,6 +1344,16 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
               setNativeAudioTracks(e.nativeEvent.audioTracks);
               setNativeSubtitleTracks(e.nativeEvent.subtitleTracks);
             }}
+            onChannelKey={(e) => {
+              // Remote CH+ = next channel, CH- = previous channel (same as
+              // the buttons on screen).
+              const nav = e.nativeEvent.direction === "up" ? onNext : onPrevious;
+              if (!nav) return;
+              if (isBackgroundPlayingRef.current) {
+                TvPlayerCommands.disableBackgroundAudio(tvPlayerRef);
+              }
+              nav();
+            }}
             onPipModeChange={(e) => {
               handlePipChange(e.nativeEvent.isInPiP);
             }}

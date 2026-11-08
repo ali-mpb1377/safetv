@@ -110,6 +110,7 @@ class TvPlayerView(context: Context, appContext: AppContext) : ExpoView(context,
     val onTracksChange by EventDispatcher()
     val onPipModeChange by EventDispatcher()
     val onEngineChange by EventDispatcher()
+    val onChannelKey by EventDispatcher()
 
     init {
         gravity = Gravity.CENTER
@@ -572,6 +573,11 @@ class TvPlayerView(context: Context, appContext: AppContext) : ExpoView(context,
         mainHandler.removeCallbacks(positionPoller)
     }
 
+    /** Remote CH+ (up) / CH- (down), forwarded by MainActivity via KeyRegistry. */
+    fun dispatchChannelKey(up: Boolean) {
+        onChannelKey(mapOf("direction" to if (up) "up" else "down"))
+    }
+
     override fun onDetachedFromWindow() {
         // VLC cannot play background audio — always fully release before the
         // surface is destroyed, otherwise its native render thread crashes
@@ -587,6 +593,7 @@ class TvPlayerView(context: Context, appContext: AppContext) : ExpoView(context,
             playerManager.clearVideoSurface()
         }
 
+        KeyRegistry.clearListener(this)
         super.onDetachedFromWindow()
         if (!isTV && !PipRegistry.isEnteringPip) PipRegistry.clearPipListener(this)
 
@@ -597,6 +604,7 @@ class TvPlayerView(context: Context, appContext: AppContext) : ExpoView(context,
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        KeyRegistry.setListener(this)
         if (!isTV) PipRegistry.setPipListener(this)
         if (!backgroundAudioEnabled && playerManager.isPlaying()) {
             ensureForegroundSession()
