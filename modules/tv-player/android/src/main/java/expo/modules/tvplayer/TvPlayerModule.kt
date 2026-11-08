@@ -129,6 +129,7 @@ class TvPlayerModule : Module() {
                 "onTracksChange",
                 "onPipModeChange",
                 "onEngineChange",
+                "onChannelKey",
             )
 
             // ── Commands (imperative API, auto-added to React ref) ─────────

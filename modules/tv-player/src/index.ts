@@ -72,6 +72,10 @@ export interface TvPlayerViewProps {
   }) => void;
   /** Fires when the app enters or exits Picture-in-Picture mode. */
   onPipModeChange?: (event: { nativeEvent: { isInPiP: boolean } }) => void;
+  /** Remote CH+ ("up") / CH- ("down"), delivered by MainActivity. */
+  onChannelKey?: (event: {
+    nativeEvent: { direction: "up" | "down" };
+  }) => void;
   /** Fires when the player engine changes (exoplayer <-> vlc). */
   onEngineChange?: (event: { nativeEvent: { engine: string } }) => void;
 }

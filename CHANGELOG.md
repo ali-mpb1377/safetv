@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.5] — 2026-11-05
+
+### Fixed
+- TV remote: the **CH+ / CH-** (channel up / down) keys did not change the
+  channel in the full-screen player. They are now caught by the app itself
+  (also Page Up / Page Down on remotes that send those): **CH+ = next channel,
+  CH- = previous channel**, the same as the buttons on screen (right = next,
+  left = previous), in the order of the list you opened the player from.
+
+---
+
 ## [1.8.4] — 2026-11-05
 
 ### Fixed
