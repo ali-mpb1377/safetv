@@ -194,6 +194,9 @@ class VlcPlayerController(
         // safely.
         mediaPlayer = org.videolan.libvlc.MediaPlayer(libVLC).apply {
             setEventListener { event ->
+                // An exception thrown on VLC's own thread would crash the whole app, so
+                // nothing in here is allowed to escape.
+                try {
                 if (released) return@setEventListener
                 when (event.type) {
                     org.videolan.libvlc.MediaPlayer.Event.Opening -> {
@@ -268,6 +271,9 @@ class VlcPlayerController(
                         }
                     }
                     else -> {}
+                }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "VLC event handler error: ${e.message}")
                 }
             }
         }

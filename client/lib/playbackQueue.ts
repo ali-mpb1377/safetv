@@ -16,10 +16,12 @@ let looping = false;
 
 export function setPlaybackQueue(
   channels: Channel[] | null,
-  opts?: { loop?: boolean },
+  opts?: { loop?: boolean; origin?: string },
 ) {
   queue = channels;
   looping = !!channels && !!opts?.loop;
+  queueOrigin = opts?.origin ?? null;
+  lastPlayedId = null;
 }
 
 export function getPlaybackQueue(): Channel[] | null {
@@ -66,4 +68,25 @@ export function allowChannelSwitch(
   if (now - lastSwitchAt < minGapMs) return false;
   lastSwitchAt = now;
   return true;
+}
+
+/**
+ * Which list opened the player ("live" = the Live TV screen) and the channel the
+ * player ended on. The player changes channel with next / previous, so when it
+ * is closed the Live TV screen shows THAT channel in its preview, not the one
+ * that was opened first.
+ */
+let queueOrigin: string | null = null;
+let lastPlayedId: string | null = null;
+
+export function setLastPlayedChannel(id: string) {
+  lastPlayedId = id;
+}
+
+/** Returns (and forgets) the last played channel id if `forOrigin` opened the player. */
+export function takeLastPlayedChannel(forOrigin: string): string | null {
+  const id = lastPlayedId;
+  const ok = queueOrigin === forOrigin;
+  lastPlayedId = null;
+  return ok ? id : null;
 }

@@ -641,6 +641,22 @@ export const AdvancedVideoPlayer = React.memo(function AdvancedVideoPlayer({
   const loadSourceRef = useRef(loadSource);
   loadSourceRef.current = loadSource;
 
+  // Watchdog: a stream that never starts (dead channel) must not leave the
+  // player waiting for ever. After 30 s show an error with Retry, and shut
+  // the VLC player down so a late connection cannot start playing sound
+  // behind the error screen.
+  useEffect(() => {
+    if (!isLoading || error) return;
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+      setError("This channel is not responding. Press Retry or choose another channel.");
+      if (activePlayerEngine === "vlc") {
+        TvPlayerCommands.release(tvPlayerRef);
+      }
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [isLoading, error, activePlayerEngine]);
+
   // Native view callback ref — fires when the native view mounts.
   const nativeViewRef = useCallback((node: any) => {
     (tvPlayerRef as React.MutableRefObject<any>).current = node;

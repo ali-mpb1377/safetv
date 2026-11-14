@@ -7,6 +7,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning: [S
 
 ---
 
+## [1.8.6] — 2026-11-08
+
+### Fixed
+- Live TV: after watching full-screen and zapping with next / previous (for
+  example channel 1 → 3), going back showed channel 1 in the preview. It now
+  shows the channel you left (channel 3): the preview plays it, the row is
+  selected, scrolled into view and focused.
+- A channel that dies or never starts can no longer freeze or close the app:
+  every VLC event is handled inside a catch-all (an exception on VLC's own
+  thread used to be able to crash the app), and a stream that has not started
+  after 30 seconds shows "This channel is not responding" with Retry and shuts
+  the VLC player down instead of waiting for ever.
+- The subscription is only re-checked after a rejected stream (401 / 403) when
+  the channel is served by the account server, not for direct streams.
+
+---
+
 ## [1.8.5] — 2026-11-05
 
 ### Fixed

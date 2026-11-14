@@ -53,5 +53,6 @@ export function useChannelPressFlow(
     onChannelPress,
     openPreviewFullscreen,
     clearPreview,
+    showInPreview: setPreviewChannel,
   };
 }

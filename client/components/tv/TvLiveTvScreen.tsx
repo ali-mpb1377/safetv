@@ -22,7 +22,8 @@ import { Channel } from "@/types/playlist";
 import { TvEpgBanner } from "./TvEpgBanner";
 import { MiniPreviewPlayer } from "@/components/MiniPreviewPlayer";
 import { useChannelPressFlow } from "@/hooks/useChannelPressFlow";
-import { setPlaybackQueue } from "@/lib/playbackQueue";
+import { useFocusEffect } from "@react-navigation/native";
+import { setPlaybackQueue, takeLastPlayedChannel } from "@/lib/playbackQueue";
 
 const isTV = Platform.isTV;
 
@@ -248,14 +249,50 @@ export function TvLiveTvScreen({
 
   // Channel press: first press previews in the small player, pressing the
   // same channel again opens it fullscreen (PIN is asked first if enabled).
-  const { previewChannel, onChannelPress } = useChannelPressFlow();
+  const { previewChannel, onChannelPress, showInPreview } =
+    useChannelPressFlow();
+  const [restoreIndex, setRestoreIndex] = useState<number | null>(null);
+
+  // Back from the full-screen player: show the channel the player ended on
+  // (after zapping with next / previous) in the preview, select it and bring
+  // it into view, instead of the channel that was opened first.
+  useFocusEffect(
+    useCallback(() => {
+      const id = takeLastPlayedChannel("live");
+      if (!id) return;
+      const index = filteredChannels.findIndex((ch) => ch.id === id);
+      if (index === -1) return;
+      showInPreview(filteredChannels[index]);
+      setSelectedChannelId(id);
+      setFocusedChannelId(id);
+      setRestoreIndex(index);
+      const snapped =
+        Math.floor(Math.max(0, index - WINDOW_BUFFER) / WINDOW_STEP) *
+        WINDOW_STEP;
+      setWindowStart(snapped);
+      const viewport = channelViewportRef.current;
+      const offset = Math.max(
+        0,
+        index * ROW_HEIGHT - Math.max(0, viewport / 2 - ROW_HEIGHT),
+      );
+      channelOffsetRef.current = offset;
+      setTimeout(
+        () => channelListRef.current?.scrollTo({ y: offset, animated: false }),
+        0,
+      );
+    }, [filteredChannels, showInPreview]),
+  );
+
   const handleChannelPress = useCallback(
     (ch: Channel) => {
       setSelectedChannelId(ch.id);
       // Next / previous in the player follow what is shown here (category,
       // search...), not the whole playlist.
       // A channel search result keeps cycling inside itself.
-      setPlaybackQueue(filteredChannels, { loop: channelSearch.trim() !== "" });
+      setPlaybackQueue(filteredChannels, {
+        loop: channelSearch.trim() !== "",
+        origin: "live",
+      });
       onChannelPress(ch);
     },
     [onChannelPress, filteredChannels, channelSearch],
@@ -403,7 +440,7 @@ export function TvLiveTvScreen({
                         nowTitle={channelEpg?.now?.title}
                         isSelected={selectedChannelId === channel.id}
                         isFocused={focusedChannelId === channel.id}
-                        hasTVPreferredFocus={isTV && index === 0}
+                        hasTVPreferredFocus={isTV && index === (restoreIndex ?? 0)}
                         onFocus={() => handleChannelFocus(channel, index)}
                         onPress={() => handleChannelPress(channel)}
                         onLongPress={() => toggleFavorite(channel.id)}

@@ -28,6 +28,7 @@ import {
   isPlaybackQueueLooping,
   stepChannel,
   allowChannelSwitch,
+  setLastPlayedChannel,
 } from "@/lib/playbackQueue";
 import { buildStreamHeaders, buildStreamUrl } from "@/lib/api";
 import { useTheme } from "@/hooks/useTheme";
@@ -192,6 +193,11 @@ export default function PlayerScreen() {
     await toggleFavorite(channelId);
   }, [channelId, toggleFavorite]);
 
+  // The Live TV list shows this channel in its preview when the player closes.
+  useEffect(() => {
+    setLastPlayedChannel(channelId);
+  }, [channelId]);
+
   const handleChannelNav = useCallback(
     (direction: "prev" | "next") => {
       if (!playlist) return;
@@ -232,9 +238,11 @@ export default function PlayerScreen() {
       console.error("Player error");
       // A rejected stream can mean the subscription just ended: ask the
       // server, which decides what happens next.
-      if (/\b(401|403)\b/.test(error)) reportPlaybackForbidden();
+      if (channel?.viaServer && /\b(401|403)\b/.test(error)) {
+        reportPlaybackForbidden();
+      }
     },
-    [reportPlaybackForbidden],
+    [reportPlaybackForbidden, channel?.viaServer],
   );
 
   const drmConfig = useMemo((): DRMConfig | undefined => {
